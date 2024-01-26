@@ -1,0 +1,17 @@
+#!/bin/bash
+
+# Stop the tic service
+sudo systemctl stop tic
+
+# Change to the working directory
+cd /home/poweruser/src/ocabox-server
+
+# Pull the latest changes from Git
+git pull
+
+# Install any new dependencies (if necessary)
+poetry update
+poetry install
+
+# Start the tic service again
+sudo systemctl start tic

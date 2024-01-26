@@ -1,0 +1,43 @@
+tree:
+  zibi-ocabox-800:
+    observatory:
+      comment: Simulated on ASA computer in CAMK
+      lon: 24.627222    # Paranal
+      lat: -70.404167
+      elev: 2635.0
+      epoch: 2000
+      protocol: alpaca
+      address: http://localhost:80/api/v1
+      components:
+        mount:
+          kind: telescope
+          device_number: 0
+        derotator:
+          kind: rotator
+          device_number: 0  #  address will be taken from parent if not provided
+        focuser:
+          kind: focuser
+          device_number: 0
+          focus_tolerance: 5  # optional
+        dome:
+          kind: dome
+          device_number: 0
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+        camera:
+          kind: camera
+          device_number: 0
+        filterwheel:
+          kind: filterwheel
+          device_number: 0
+          filters: {}  # optional
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
+          device_number: 0
+        covercalibrator2:
+          kind: covercalibratorOCA
+          device_number: 0

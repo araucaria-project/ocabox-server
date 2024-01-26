@@ -1,0 +1,19 @@
+version: '3.8'
+
+networks:
+  ocabox-network:
+    driver: bridge
+
+services:
+  ocabox:
+    build:
+      context: ./
+      args:
+        OCABOX_ROUTER_PORT: ${OCABOX_ROUTER_PORT}
+    stop_signal: SIGINT
+    ports:
+      - ${OCABOX_ROUTER_PORT}:${OCABOX_ROUTER_PORT}
+    volumes:
+      - './ob/comunication/:/ob/comunication/'
+    networks:
+      - ocabox-network

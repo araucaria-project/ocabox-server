@@ -1,0 +1,323 @@
+LOG_LEVEL: INFO
+
+OCABOX_BUILD_FILE_NAME: "tree_build_example.py"   # file name witch tree build plans, this property can be set only in configuration/config.yaml or environment property
+
+nats:
+  host: "localhost"
+  port: 4222
+  streams:
+    alpaca_config: "tic.config.observatory"
+    plan_stream: "tic.status.{}.program.current"  # current loaded program
+    status_stream: "tic.status.{}.program.state"  # actual state of current loaded stream
+
+router:
+  DefaultRouter:
+    port: 5559
+    url: '*'
+    protocol: tcp
+    timeout: 30
+  SampleTestRouter:
+    port: 5560
+    url: '*'
+    protocol: tcp
+    timeout: 1
+
+client:
+  TOI_Client:
+    port: 5558
+    url: tic.oca.lan
+    protocol: tcp
+    timeout: 30
+    time_of_data_tolerance: 0.5  # extra, not used by ocabox
+    request_timeout: 5.1  # extra, not used by ocabox
+    delay: 0.1  # extra, not used by ocabox
+    max_missed_msg: 3  # extra, not used by ocabox
+    app:
+      base_fits_dir: /data/fits/
+      base_log_toi_dir: ~/.oca/log_toi
+      base_cycle_time_calc_dir: /data/misc/cycle_time_calc
+      base_log_night_dir: ~/.oca/log_night
+      base_program_dir: ~/Desktop
+      nats_subject: #Rpc subject: [rpc_root].[tel_id].[service_name], Journal subject: [journal_root].[tel_id].[service_name]
+        rpc_root: 'tic.rpc'
+        journal_root: 'tic.journal'
+        status_root: 'tic.status'
+        discovery_root: 'tic.discovery'
+        telemetry_davis: 'telemetry.weather.davis'
+        service_name:
+          download: 'download'
+          guiding: 'guiding'
+          pipeline: 'pipeline'
+        tic_comp: #Journal exampl: [journal_root].[tel_id].[tic_component].[planner_sub]
+          planner: 'planner'
+          guider_handler: 'guider_handler'
+        planner_status:
+          plan_static: 'static'
+          plan_status: 'status'
+          plan_time: 'time'
+          camera_exposure: 'camera_exposure'
+        rpc_service_alive: 'alive' #Rpc service alive subject: [rpc_root].[tel_id].[service_name].[rpc_service_alive]
+            # e.g.: tic.rpc.zb08.pipeline.alive
+            # e.g.: tic.pipeline.zb08.alive  {timestamp: 2021-03-04T12:00:00.000000Z, next_alvie: 2021-03-04T12:00:00.000000Z, status: 1}
+        service_health: 'health' #Rpc service health subject: [rpc_root].[tel_id].[service_name].[service_health]
+            # e.g. tic.rpc.zb08.pipeline.health
+            # e.g. tic.pipeline.zb08.rpc.health
+            # STREM RPC TIC:  tic.*.(*).rpc.>  oraz
+            # e.g. tic.rpc.tits.health
+            # tic.discovery.zb08.pipeline
+            # tic.discovery.zb08.tcu.tmeperture
+            # discovery.>
+            # oca.discovery
+      nats_host: nats.oca.lan
+      nats_port: 4222
+
+  CliClient:
+    port: 5558
+    url: tic.oca.lan
+    protocol: tcp
+    timeout: 31.7
+    time_of_data_tolerance: 0.5  # extra, not used by ocabox
+    request_timeout: 2.17  # extra, not used by ocabox
+    delay: 0.1  # extra, not used by ocabox
+    max_missed_msg: 3  # extra, not used by ocabox
+    app:
+      base_fits_dir: /data/fits/
+      base_log_textui_dir: ~/.oca/log_textui
+      base_cycle_time_calc_dir: /data/misc/cycle_time_calc
+      base_log_night_dir: ~/.oca/log_night
+      base_program_dir: ~/Desktop
+      nats_subject: #Rpc subject: [rpc_root].[tel_id].[service_name], Journal subject: [journal_root].[tel_id].[service_name]
+        rpc_root: 'tic.rpc'
+        journal_root: 'tic.journal'
+        status_root: 'tic.status'
+        discovery_root: 'tic.discovery'
+        telemetry_davis: 'telemetry.weather.davis'
+        service_name:
+          download: 'download'
+          guiding: 'guiding'
+          pipeline: 'pipeline'
+        tic_comp: #Journal exampl: [journal_root].[tel_id].[tic_component].[planner_sub]
+          planner: 'planner'
+          guider_handler: 'guider_handler'
+        planner_status:
+          plan_static: 'static'
+          plan_status: 'status'
+          plan_time: 'time'
+          camera_exposure: 'camera_exposure'
+        rpc_service_alive: 'alive' #Rpc service alive subject: [rpc_root].[tel_id].[service_name].[rpc_service_alive]
+        # e.g.: tic.rpc.zb08.pipeline.alive
+        # e.g.: tic.pipeline.zb08.alive  {timestamp: 2021-03-04T12:00:00.000000Z, next_alvie: 2021-03-04T12:00:00.000000Z, status: 1}
+        service_health: 'health' #Rpc service health subject: [rpc_root].[tel_id].[service_name].[service_health]
+          # e.g. tic.rpc.zb08.pipeline.health
+          # e.g. tic.pipeline.zb08.rpc.health
+          # STREM RPC TIC:  tic.*.(*).rpc.>  oraz
+          # e.g. tic.rpc.tits.health
+          # tic.discovery.zb08.pipeline
+          # tic.discovery.zb08.tcu.tmeperture
+        # discovery.>
+        # oca.discovery
+      nats_host: nats.oca.lan
+      nats_port: 4222
+
+  DefaultClient:
+    port: 5559
+    url: localhost
+    protocol: tcp
+    timeout: 30
+    time_of_data_tolerance: 0.5  # extra, not used by ocabox
+    request_timeout: 2.16  # extra, not used by ocabox
+    delay: 0.1  # extra, not used by ocabox
+    max_missed_msg: 3  # extra, not used by ocabox
+    app:
+      base_fits_dir: /data/fits/
+      base_cycle_time_calc_dir: /data/misc/cycle_time_calc
+      base_log_night_dir: ~/.oca/log_night
+      base_program_dir: ~/Desktop
+      nats_subject: #Rpc subject: [rpc_root].[tel_id].[service_name], Journal subject: [journal_root].[tel_id].[service_name]
+        rpc_root: 'tic.rpc'
+        journal_root: 'tic.journal'
+        status_root: 'tic.status'
+        discovery_root: 'tic.discovery'
+        telemetry_davis: 'telemetry.weather.davis'
+        service_name:
+          download: 'download'
+          guiding: 'guiding'
+          pipeline: 'pipeline'
+        tic_comp: #Journal exampl: [journal_root].[tel_id].[tic_comp]
+          planner: 'planner'
+          guider_handler: 'guider_handler'
+        planner_status: #Journal exampl: [status_root].[tel_id].[tic_comp].[plan_static]
+          plan_static: 'static'
+          plan_status: 'status'
+          plan_time: 'time'
+          camera_exposure: 'camera_exposure'
+        rpc_service_alive: 'alive' #Rpc service alive subject: [rpc_root].[tel_id].[service_name].[rpc_service_alive]
+        # e.g.: tic.rpc.zb08.pipeline.alive
+        # e.g.: tic.pipeline.zb08.alive  {timestamp: 2021-03-04T12:00:00.000000Z, next_alvie: 2021-03-04T12:00:00.000000Z, status: 1}
+        service_health: 'health' #Rpc service health subject: [rpc_root].[tel_id].[service_name].[service_health]
+          # e.g. tic.rpc.zb08.pipeline.health
+          # e.g. tic.pipeline.zb08.rpc.health
+          # STREM RPC TIC:  tic.*.(*).rpc.>  oraz
+          # e.g. tic.rpc.tits.health
+          # tic.discovery.zb08.pipeline
+          # tic.discovery.zb08.tcu.tmeperture
+        # discovery.>
+        # oca.discovery
+      nats_host: nats.oca.lan
+      nats_port: 4222
+
+  SampleTestClient:
+    port: 5560
+    url: localhost
+    protocol: tcp
+    timeout: 1
+    app:
+      base_fits_dir_test_default: test_dir22
+
+comunication:
+  ConditionalCycleQuery:
+    default_delay: 5
+    max_missed_msg: 3
+    request_timeout: 30
+  PeriodicCycleQuery:
+    default_delay: 5
+    max_missed_msg: 3
+    request_timeout: 30
+    min_delay: 0.5
+
+data_collection:
+  ValueRequest:
+    default_request_timeout: 30
+    time_of_data_tolerance: 60
+  TreeAlpacaObservatory:
+    timeout_multiplier: 0.8  # this should be 0 < x < 1
+    api_version: 1
+  TreeBaseRequestBlocker:
+    default_control_time: 60
+    max_control_time: 86400 # 24h
+    white_list:
+      GET: []
+      PUT: []
+    black_list:
+      GET: []
+      PUT: []
+  TreeConditionalFreezer:
+    max_unsuccessful_refreshes: 10
+    alarm_timeout: 2 # WARNING, the value should be greater than the overall timeout
+    min_time_of_data_tolerance: 0.2 # !!! Never set to 0 or less
+  TreeCache:
+    no_cachable_regex:
+      - .*\.is_access$
+  TreeCCTV:   # Ubiquity CCTV camera
+    udm_camera_id: ''
+    udm_host: ''
+    udm_port: 443
+    udm_user: 'api'
+    udm_password: ''
+  GuiderHandler:
+    guider_source_name: guider
+
+# todo to wrzucić do NATS
+site:
+  sample_key: 123
+
+tree:
+  test_sample_blocker:
+    white_list:
+      GET: []
+      PUT:
+        - telescope.some_val
+        - telescope.some_val2
+    black_list:
+      GET:
+        - telescope.some_val3
+        - telescope.some_val4
+  test_sample_freezer:
+    max_unsuccessful_refreshes: 10
+    alarm_timeout: 2
+    min_time_of_data_tolerance: 0.2
+  test_sample_provider:
+    h:
+      d: 9
+    f:
+      j: 7
+  test_observatory:
+    observatory:
+      comment: Simulated observatory for tests
+      lon: 51
+      lat: 0
+      elev: 667.0
+      epoch: 2000
+      protocol: alpaca
+      address: http://localhost:80/api/v1
+      components:
+        dibi:
+          kind: telescope
+          comment: DIBI Autoslew Simulated Telescope
+          device_number: 0
+          min_alt: 15
+          components:
+            derotator:
+              kind: rotator
+              device_number: 0
+        dome:
+          kind: dome
+          device_number: 0
+        filterwheel:
+          kind: filterwheel
+          device_number: 0
+          filters: {} # optional
+        filterwheel2:  # second filterwheel but in alpaca is the same
+          kind: filterwheel
+          device_number: 1
+          filters: # optional
+            a: 1
+            b: 2
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+        camera:
+          kind: camera
+          device_number: 0
+        focuser:
+          kind: focuser
+          device_number: 0
+          focus_tolerance: 5  # optional
+        derotator:
+          kind: rotator
+          device_number: 0
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
+          device_number: 0
+        guider:
+          kind: camera
+          device_number: 1
+
+  test_observatory_down:
+    observatory:
+      comment: Simulated observatory for tests
+      lon: -24.47
+      lat: -0.17
+      elev: 667.0
+      epoch: 2000
+      protocol: alpaca
+      address: http://10.255.255.1/api/v1  # this url address should return connection timeout error
+      components:
+        dibi:
+          kind: telescope
+          comment: DIBI Autoslew Simulated Telescope
+          device_number: 0
+          components:
+            derotator:
+              kind: rotator
+              device_number: 0
+
+#  cctv-zb08: # Ubiquity CCTV cameras configured inob/configuration/config_oca.yaml
+#    udm_camera_id: CD08
+#    udm_host: ''
+#    udm_port: 443
+#    udm_user: 'api'
+#    udm_password: ''

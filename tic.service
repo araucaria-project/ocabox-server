@@ -1,0 +1,18 @@
+# symlinik to /etc/systemd/system/tic.service
+# sudo systemctl enable tic
+# sudo systemctl start tic
+# sudo systemctl status tic
+
+[Unit]
+Description=TIC Telescope and Instrument Control (ocabox-server)
+After=network.target
+
+[Service]
+User=poweruser
+WorkingDirectory=/home/poweruser/src/ocabox-server
+ExecStart=/home/poweruser/.local/bin/poetry run server
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
