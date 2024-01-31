@@ -1,4 +1,4 @@
-version: '3.8'
+version: '3.9'
 
 networks:
   ocabox-network:
@@ -14,6 +14,6 @@ services:
     ports:
       - ${OCABOX_ROUTER_PORT}:${OCABOX_ROUTER_PORT}
     volumes:
-      - './ob/comunication/:/ob/comunication/'
+      - './obsrv/comunication/:/obsrv/comunication/'
     networks:
-      - ocabox-network
+      - ocabox-server-network
