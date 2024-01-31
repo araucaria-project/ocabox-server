@@ -6,7 +6,6 @@ import logging
 import os
 import sys
 from obsrv.ob_config import SingletonConfig
-from obsrv.ob_config import SingletonConfig as rrr
 
 import signal
 

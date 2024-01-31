@@ -8,6 +8,8 @@ from obsrv.comunication.base_request_solver import BaseRequestSolver
 from obcom.comunication.comunication_error import CommunicationTimeoutError
 from obcom.comunication.message_serializer import MessageSerializer
 from obcom.comunication.multipart_structure import MultipartStructure
+
+from obsrv.ob_config import SingletonConfig
 from obsrv.util_functions.asyncio_util_functions import wait_for_psce
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
@@ -16,6 +18,7 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 class Router(BaseZmqCommunicationObject):
     DEFAULT_NAME = 'DefaultRouter'
     TYPE = 'router'
+    _SING_CONF = SingletonConfig
 
     def __init__(self, request_solver: BaseRequestSolver or None, name: str = None, port: int = None, **kwargs):
         super().__init__(name=name, port=port, **kwargs)
@@ -401,5 +404,6 @@ class Router(BaseZmqCommunicationObject):
     def __del__(self):
         if not self.is_stopped():
             self.stop()
-        self._front_socket.close()
+        if self._front_socket:
+            self._front_socket.close()
         super().__del__()
