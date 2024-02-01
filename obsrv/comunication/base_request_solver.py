@@ -3,6 +3,7 @@ import logging
 from typing import List
 from abc import ABC, abstractmethod
 import confuse
+from nats.errors import TimeoutError
 from serverish.base import dt_utcnow_array, MessengerNotConnected
 from serverish.messenger import get_publisher
 from obsrv.comunication.nats_streams import NatsStreams
@@ -186,3 +187,6 @@ class BaseRequestSolver(ABC):
                                     })
         except MessengerNotConnected as e:
             logger.error(f"Can not publish config alpaca to nats, error: {e}")
+        except TimeoutError as e:
+            logger.error(f"Can not publish config alpaca to nats, error: {e}")
+
