@@ -80,6 +80,9 @@ class Router(BaseZmqCommunicationObject):
             order = message_dict.get("command")
             if order is not None and order == "is_alive":
                 r = {"command": order, "response": True}
+            if order is not None and order == "reload_config":
+                result = await self.request_solver.reload_nats_config()
+                r = {"command": order, "response": result}
         resp = MessageSerializer.pack_b(r)
         response.append(resp)
 

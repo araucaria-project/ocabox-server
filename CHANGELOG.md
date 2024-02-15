@@ -3,6 +3,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.1]
+### Added
+- Add new service request `reload_config`. This request reload configuration files and send it to NATS.
 
 ## [1.0.0]
 ### Added

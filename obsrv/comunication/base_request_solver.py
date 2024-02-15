@@ -161,7 +161,8 @@ class BaseRequestSolver(ABC):
                 li = li + self._find_alpacas(config=val.get("child", []))
         return li
 
-    def _get_site_cfg(self) -> dict:
+    @staticmethod
+    def _get_site_cfg() -> dict:
         out = {}
         try:
             site = SingletonConfig.get_config()['site'].get()
@@ -171,7 +172,7 @@ class BaseRequestSolver(ABC):
             logger.warning("Can not find key: site  in configuration")
         return out
 
-    async def _nats_update_config_alpaca(self):
+    async def _nats_update_config_alpaca(self) -> bool:
         publisher = get_publisher(NatsStreams.ALPACA_CONFIG)
         cfg = self._get_alpaca_modules_configuration()
         site_cfg = self._get_site_cfg()
@@ -185,8 +186,16 @@ class BaseRequestSolver(ABC):
                                         "tags": ["config_alpaca"],
                                         'sender': 'Ocabox server',
                                     })
+            out = True
         except MessengerNotConnected as e:
             logger.error(f"Can not publish config alpaca to nats, error: {e}")
+            out = False
         except TimeoutError as e:
             logger.error(f"Can not publish config alpaca to nats, error: {e}")
+            out = False
+        return out
 
+    async def reload_nats_config(self) -> bool:
+        logger.debug(f"Resending configuration to nats")
+        SingletonConfig.get_config(rebuild=True).get()  # reload configuration data
+        return await self._nats_update_config_alpaca()
