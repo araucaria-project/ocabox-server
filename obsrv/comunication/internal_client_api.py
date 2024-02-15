@@ -45,6 +45,9 @@ class InternalClientAPI(BaseClientAPI):
     async def server_is_alive(self, request_timeout: float = None):
         return True
 
+    async def server_reload_nats_config(self):
+        return self._request_solver.reload_nats_config()
+
     def get_cfg(self, name_cfg: str, default=None, use_default_settings=True):
         # todo Mikołaj coś trzeba zrobić z tym configiem żeby twoje api było kompatybilne na serverze !!!
         return default

@@ -24,3 +24,6 @@ class BaseRequestSolverProtocol(Protocol):
 
     def get_tree_configuration(self) -> dict:
         pass
+
+    def reload_nats_config(self) -> bool:
+        pass
