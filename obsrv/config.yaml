@@ -21,6 +21,8 @@ router:
     url: '*'
     protocol: tcp
     timeout: 1
+    test_deep:
+      test_property: dir
 
 
 comunication:
@@ -68,6 +70,15 @@ data_collection:
 
 site:
   sample_key: 123
+  client:
+    ExsampleClient:
+      opcja_ktora_nie_istnieje: false
+      ticconnection:
+        port: 5558
+        url: localhost
+        protocol: tcp
+        timeout: 30
+
 
 tree:
   test_sample_blocker:

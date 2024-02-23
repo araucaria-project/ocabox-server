@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.2]
+### Changed
+- The application has been adapted to the new requirements in version 1.0.1 of `ocabox-common`.
+- 
 ## [1.0.1]
 ### Added
 - Add new service request `reload_config`. This request reload configuration files and send it to NATS.

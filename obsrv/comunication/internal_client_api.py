@@ -45,7 +45,7 @@ class InternalClientAPI(BaseClientAPI):
     async def server_is_alive(self, request_timeout: float = None):
         return True
 
-    async def server_reload_nats_config(self):
+    async def server_reload_nats_config(self, request_timeout: float = None):
         return self._request_solver.reload_nats_config()
 
     def get_cfg(self, name_cfg: str, default=None, use_default_settings=True):

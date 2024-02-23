@@ -8,20 +8,22 @@ from obsrv.comunication.base_request_solver import BaseRequestSolver
 from obcom.comunication.comunication_error import CommunicationTimeoutError
 from obcom.comunication.message_serializer import MessageSerializer
 from obcom.comunication.multipart_structure import MultipartStructure
-
-from obsrv.ob_config import SingletonConfig
+from obsrv.comunication.base_router_with_config import BaseRouterWithConfig
 from obsrv.util_functions.asyncio_util_functions import wait_for_psce
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 
-class Router(BaseZmqCommunicationObject):
+class Router(BaseRouterWithConfig):
     DEFAULT_NAME = 'DefaultRouter'
     TYPE = 'router'
-    _SING_CONF = SingletonConfig
 
     def __init__(self, request_solver: BaseRequestSolver or None, name: str = None, port: int = None, **kwargs):
         super().__init__(name=name, port=port, **kwargs)
+        self._port = self._port if self._port is not None else self.get_cfg('port')  # rewrite port from config
+        if not self._port or not isinstance(self._port, int):
+            logger.error(f"Can not get correct port ({self._port}) for {self.TYPE}")
+            raise RuntimeError
         # request solver
         self.request_solver: BaseRequestSolver or None = request_solver
         # OMQ
