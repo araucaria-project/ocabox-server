@@ -310,11 +310,15 @@ class AlpacaConnector(Connector):
         :raise AlpacaHttpError: if server alpaca return unresolved error
         :return: None
         """
+        try:
+            url = response.url
+        except Exception:
+            url = 'unknown-url'
         if response.status == 400:
-            logger.error(f'Alpaca HTTP 400 error, ({response.reason}) for {response.url}')
+            logger.error(f'Alpaca HTTP 400 error, ({response.reason}) for {url}')
             raise AlpacaHttp400Error(response.reason)
         elif response.status == 500:
-            logger.error(f'Alpaca HTTP 500 error, ({response.reason}) for {response.url}')
+            logger.error(f'Alpaca HTTP 500 error, ({response.reason}) for {url}')
             raise AlpacaHttp500Error(response.reason)
         # other errors like for example 404
         try:
@@ -326,10 +330,10 @@ class AlpacaConnector(Connector):
         try:
             j = await response.json()
         except aiohttp.ContentTypeError as e:
-            logger.error(f'Alpaca content type error. Status {response.status} error for {response.url}')
+            logger.error(f'Alpaca content type error. Status {response.status} error for {url}')
             raise AlpacaContentTypeError from e
         if j["ErrorNumber"] != 0:
-            logger.error(f'Alpaca error, code={j["ErrorNumber"]}, msg={j["ErrorMessage"]}')
+            logger.error(f'Alpaca error, code={j["ErrorNumber"]}, msg={j["ErrorMessage"]} for {url}')
             raise AlpacaError(j["ErrorNumber"], j["ErrorMessage"])
 
 
