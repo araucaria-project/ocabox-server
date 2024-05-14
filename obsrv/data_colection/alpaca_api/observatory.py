@@ -439,6 +439,27 @@ class CoverCalibratorOCA(CoverCalibrator):
         return await self._put("action", kind=Telescope.KIND, Action='telescope:opencover', Parameters='')
 
 
+class Tertiary(Device):
+    """Tertiary specific method"""
+    KIND = StandardTelescopeComponents.TERTIARY
+
+    # TODO ponieważ takiego czegoś niema w alpace i to jest specyficzne dla OCA. (specyficzne jak narazie)
+
+
+class TertiaryOCA(Tertiary):
+    """Tertiary OCA specific methods"""
+
+    async def selectnasmythport_put(self, **kwargs):
+        """Name parameters to set 'Position' """
+        parameters = ""
+        position = kwargs.get("Position", None)
+        if position is None:
+            pass
+        elif isinstance(position, int):
+            parameters = "" + str(position)
+        return await self._put("action", kind=Telescope.KIND, Action='selectnasmythport', Parameters=parameters)
+
+
 _component_classes = {
     Telescope.KIND: Telescope,
     Dome.KIND: Dome,
@@ -449,5 +470,7 @@ _component_classes = {
     Switch.KIND: Switch,
     SafetyMonitor.KIND: SafetyMonitor,
     CoverCalibrator.KIND: CoverCalibrator,
+    Tertiary.KIND: Tertiary,  # here is a custom key, normally shou by Tertiary but its specific kind only for OCA!
+    "tertiaryOCA": TertiaryOCA,  # here is a custom key !
     'covercalibratorOCA': CoverCalibratorOCA,  # here is a custom key !
 }

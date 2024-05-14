@@ -9,3 +9,4 @@ class StandardTelescopeComponents:
     SWITCH = "switch"
     SAFETYMONITOR = "safetymonitor"
     COVERCALIBRATOR = "covercalibrator"
+    TERTIARY = "tertiary"

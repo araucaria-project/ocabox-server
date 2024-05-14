@@ -41,3 +41,6 @@ tree:
         covercalibrator2:
           kind: covercalibratorOCA
           device_number: 0
+        tertiary:
+          kind: tertiaryOCA
+          device_number: 0

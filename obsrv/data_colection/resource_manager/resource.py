@@ -219,3 +219,8 @@ class SafetymonitorAlpaca(Resource):
 class CovercalibratorAlpaca(Resource):
     RESOURCE_NAME = StandardTelescopeComponents.COVERCALIBRATOR
     COVER_STATUS_MAP = {'notpresent': 0, 'closed': 1, 'moving': 2, 'open': 3, 'unknown': 4, 'error': 5}
+
+
+class TertiaryAlpaca(Resource):
+    RESOURCE_NAME = StandardTelescopeComponents.TERTIARY
+

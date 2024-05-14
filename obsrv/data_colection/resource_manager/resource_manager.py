@@ -5,7 +5,8 @@ from typing import List, Tuple, Optional
 from obsrv.comunication.internal_client_api import InternalClientAPI
 from obsrv.data_colection.alpaca_api.standard_telescope_components import StandardTelescopeComponents
 from obsrv.data_colection.resource_manager.resource import DomeAlpaca, Resource, CovercalibratorAlpaca, \
-    SafetymonitorAlpaca, SwitchAlpaca, FocuserAlpaca, RotatorAlpaca, FilterwheelAlpaca, CameraAlpaca, MountAlpaca
+    SafetymonitorAlpaca, SwitchAlpaca, FocuserAlpaca, RotatorAlpaca, FilterwheelAlpaca, CameraAlpaca, MountAlpaca, \
+    TertiaryAlpaca
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -82,6 +83,7 @@ class TelescopeComponentManagerAlpaca(TelescopeComponentManager):
         StandardTelescopeComponents.SWITCH: SwitchAlpaca,
         StandardTelescopeComponents.SAFETYMONITOR: SafetymonitorAlpaca,
         StandardTelescopeComponents.COVERCALIBRATOR: CovercalibratorAlpaca,
+        StandardTelescopeComponents.TERTIARY: TertiaryAlpaca,
     }
 
     async def _create_resource_object_map(self, resource_map):
