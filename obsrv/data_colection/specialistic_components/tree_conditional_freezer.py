@@ -117,9 +117,6 @@ class TreeConditionalFreezer(TreeBaseProvider):
                 logger.debug(f"Update value ({request.address})")
                 status_update, err = await wait_for_psce(self._update_value(request), waiting_timeout - time.time())
             except asyncio.CancelledError:
-                # todo todo do usunięcia po rozwiązaniu issue #151
-                logger.error("Ocabox request is stop handled because self._update_value in freezer was canceled \n"
-                             f"k_value = {k_value}, waiting_timeout = {waiting_timeout}, time.time() = {time.time()}, request.address = {request.address} , timeout = {timeout}, self._alarm_timeout_offset = {self._alarm_timeout_offset}")
                 raise
             except asyncio.TimeoutError:
                 logger.debug(f"A timeout occurred while waiting for a value update")
