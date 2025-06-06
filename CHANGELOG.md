@@ -3,6 +3,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.4]
+### Changed
+- Python 3.10 required
+- Dependencies cleanup
+- Default config and tree_build updated for development config
+
 ## [1.0.3]
 ### Added
 - add `Tertiary` component to alpaca driver as new kind

@@ -1,24 +1,26 @@
 tree:
-  zibi-ocabox-800:
+  sim:
     observatory:
-      comment: Simulated on ASA computer in CAMK
-      lon: 24.627222    # Paranal
-      lat: -70.404167
-      elev: 2635.0
+      comment: ASCOM Simulator at OCA
+      flags: [ 'dev' ] # telescope is only in dev mode
+      lon: -70.19638    # OCA
+      lat: -24.59806
+      elev: 2817  # m      protocol: alpaca
       epoch: 2000
       protocol: alpaca
-      address: http://localhost:80/api/v1
+      address: http://docker.oca.lan:8089/api/v1
+      style: { color: '#808080' }  # magenta
       components:
         mount:
           kind: telescope
           device_number: 0
+          type: az
         derotator:
           kind: rotator
-          device_number: 0  #  address will be taken from parent if not provided
+          device_number: 0
         focuser:
           kind: focuser
           device_number: 0
-          focus_tolerance: 5  # optional
         dome:
           kind: dome
           device_number: 0
@@ -38,9 +40,113 @@ tree:
         safetymonitor:
           kind: safetymonitor
           device_number: 0
-        covercalibrator2:
-          kind: covercalibratorOCA
+
+  dev:
+    observatory:
+      comment: ASCOM Simulator at localhost:80
+      flags: [ 'dev' ] # telescope is only in dev mode
+      lon: -70.19638    # OCA
+      lat: -24.59806
+      elev: 2817  # m      protocol: alpaca
+      epoch: 2000
+      protocol: alpaca
+      address: http://localhost:80/api/v1
+      style: { color: '#FF00FF' }  # magenta
+      components:
+        mount:
+          kind: telescope
           device_number: 0
-        tertiary:
-          kind: tertiaryOCA
+          type: az
+          min_alt: 14.9 # deg
+          max_alt: 90.0 # deg
+          obs_min_alt: 35.0 # deg
+          slew_timeout: 120
+        derotator:
+          kind: rotator
+          device_number: 0
+        focuser:
+          kind: focuser
+          device_number: 0
+          move_tolerance: 5
+        dome:
+          kind: dome
+          device_number: 0
+          slew_tolerance: 3.0 # deg
+          follow_tolerance: 3.0 # deg
+          slew_timeout: 120
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+        camera:
+          kind: camera
+          device_number: 0
+          sky_flats:
+            test_exp_time: 1  # s
+            test_exp_interval: 1.0  # s
+            modes:
+              g-0_r-0: { test_adu_range: [ 20000, 25000 ], bias_level: 300}   # ADU
+            exposure_time_range: [ 5.0, 120.0 ]  # s
+            evening_factor: 1.11
+            era: 1  # incremented when conditions change, e.g. mirror cleaning
+            count: 7 # minimum number of flats to take in specific filter to produce master flat
+        guider:
+          kind: camera
+          device_number: 0
+        filterwheel:
+          kind: filterwheel
+          device_number: 0
+          filters:
+            - name: u
+              position: 0
+              description: Sloan u
+              style: { color: '#C4B1FC' }
+              focus_offset: 15
+              modifier: none
+            - name: g
+              position: 1
+              description: Sloan g
+              style: { color: '#B1F9FC' }
+              focus_offset: 0
+              modifier: none
+            - name: r
+              position: 2
+              description: Sloan r
+              style: { color: '#FCB1B1' }
+              focus_offset: -20
+              modifier: none
+            - name: i
+              position: 3
+              description: Sloan i
+              style: { color: '#FCB1E7' }
+              focus_offset: 10
+              modifier: none
+            - name: z
+              position: 4
+              description: Sloan z
+              style: { color: '#FEFFD9' }
+              focus_offset: 50
+              modifier: none
+            - name: B
+              position: 5
+              description: Johnson B
+              style: { color: '#627CFC' }
+              focus_offset: -30
+              modifier: none
+            - name: V
+              position: 6
+              description: Johnson V
+              style: { color: '#62FCAA' }
+              focus_offset: 20
+              modifier: none
+            - name: Ic
+              position: 7
+              description: Cousins I
+              style: { color: '#FC62CE' }
+              focus_offset: 10
+              modifier: none
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
           device_number: 0

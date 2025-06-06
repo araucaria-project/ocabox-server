@@ -196,6 +196,7 @@ class TreeCCTV(TreeProvider):
         self._api: UnifiProtectApiSingleton | None = None
         self.cam_name = None
         super().__init__(component_name=camera_id, source_name=source_name, subcontractor=None, **kwargs)
+        logger.warning('The TreeCCTV component is deprecated, may not work correctly and and will be removed in the future.')
         logger.info(f'Created {self}')
 
     async def get_value(self, request: ValueRequest, **kwargs) -> Value or None:
