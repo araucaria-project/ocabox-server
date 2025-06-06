@@ -121,9 +121,21 @@ If you installed the project correctly, you can run all tests by execute the com
 ```bash
   poetry run tests
 ```
-Warning ! Some tests require alpaca simulator running or/and NATS server.
+Warning! Some tests require alpaca simulator running or/and NATS server.
 
-## Run Locally
+## Run Locally (development)
+
+Out of the box, The following configuration and components-tree-build files are loaded:
+* `obsrv/config.yaml`
+* `obsrv/configuration/tree_build_example.py`
+* `obsrv/configuration/sample-config.yaml`
+Check out the content of these files to see what example configuration looks like.
+Note, that this configuration assumes that the alpaca simulator and NATS are running on the local machine and standard ports.
+
+For custom, production or development configuration, create configuration files in the following locations:
+* `/etc/ocabox/config.yaml` or
+* `obsrv/configuration/config.yaml`
+and the appropriate tree build file in the same directory.
 
 To run the sample server, you must successfully install the project. Then make sure that the example builder script is set in the configuration:
 ```yaml
