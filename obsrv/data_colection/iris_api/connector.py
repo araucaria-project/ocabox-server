@@ -1,6 +1,7 @@
 import asyncio
+import ssl
 import logging
-from typing import Dict
+from typing import Dict, List, Any
 
 from obsrv.data_colection.base_api.connector import Connector
 from obsrv.data_colection.iris_api.exceptions import RequestConnectionError, PilarError
@@ -9,11 +10,6 @@ logger = logging.getLogger(__name__.rsplit('.', 1)[-1])
 
 
 class IrisConnector(Connector):
-    """
-    TPL2 connector for communication with the IRIS telescope server (TCI/TSI).
-    Implements asynchronous sending of commands and receiving of responses.
-    """
-
     def __init__(self, host: str, port: int, **kwargs):
         self.host = host
         self.port = port
@@ -22,41 +18,73 @@ class IrisConnector(Connector):
         self._reader_task: asyncio.Task | None = None
         self._pending_requests: Dict[int, asyncio.Future] = {}
         self._transaction_id_counter = 0
-        self._lock = asyncio.Lock()  # Protects the transaction_id counter
+        self._lock = asyncio.Lock()
+        self.event_queue = asyncio.Queue()
 
     async def connect(self):
-        """Establishes a connection and starts the response reading loop."""
         if self.is_connected():
             logger.warning("Already connected.")
             return
 
         try:
             logger.info(f"Connecting to TPL2 server at {self.host}:{self.port}...")
-            self._reader, self._writer = await asyncio.open_connection(self.host, self.port)
-            # Start a background task for continuous response reading
+            
+            open_connection = asyncio.open_connection(self.host, self.port)
+            self._reader, self._writer = await asyncio.wait_for(open_connection, timeout=10.0)
+
+            welcome_msg_bytes = await self._reader.readline()
+            welcome_msg = welcome_msg_bytes.decode('utf-8').strip()
+            logger.info(f"Received welcome message: {welcome_msg}")
+
+            if "TLS" in welcome_msg:
+                logger.info("Server supports TLS. Initiating encryption...")
+                self._writer.write(b"ENC TLS\n")
+                await self._writer.drain()
+                
+                enc_response_bytes = await self._reader.readline()
+                enc_response = enc_response_bytes.decode('utf-8').strip()
+                
+                if "ENC OK" not in enc_response:
+                    raise RequestConnectionError("TLS negotiation failed.")
+
+                ssl_context = ssl.create_default_context()
+                transport = self._writer.transport
+                
+                new_reader = asyncio.StreamReader()
+                protocol = asyncio.StreamReaderProtocol(new_reader)
+                
+                await asyncio.get_running_loop().start_tls(transport, protocol, ssl_context, server_side=False)
+                
+                self._reader = new_reader
+                self._writer.set_transport(protocol.transport)
+
+                logger.info("Connection is now encrypted.")
+
             self._reader_task = asyncio.create_task(self._response_reader_loop())
             logger.info("Connection established and response reader started.")
+
         except (OSError, asyncio.TimeoutError) as e:
             raise RequestConnectionError(f"Failed to connect to {self.host}:{self.port}") from e
 
     async def close(self):
-        """Closes the connection and stops the reading loop."""
         if not self.is_connected():
             return
         
         logger.info("Closing connection...")
         if self._writer:
-            self._writer.close()
-            await self._writer.wait_closed()
+            try:
+                self._writer.close()
+                await self._writer.wait_closed()
+            except (ConnectionResetError, BrokenPipeError):
+                pass 
         
         if self._reader_task:
             self._reader_task.cancel()
             try:
                 await self._reader_task
             except asyncio.CancelledError:
-                pass  # Expected exception
+                pass
         
-        # Reject all pending requests
         for future in self._pending_requests.values():
             if not future.done():
                 future.set_exception(RequestConnectionError("Connection closed."))
@@ -69,15 +97,13 @@ class IrisConnector(Connector):
         return self._writer is not None and not self._writer.is_closing()
 
     async def _get_next_transaction_id(self) -> int:
-        """Gets the next, unique transaction ID."""
         async with self._lock:
             self._transaction_id_counter += 1
-            if self._transaction_id_counter > 4294967295: # According to TPL2 [cite: 2146]
+            if self._transaction_id_counter > 4294967295:
                 self._transaction_id_counter = 1
             return self._transaction_id_counter
 
     async def _response_reader_loop(self):
-        """A background loop that reads and processes all incoming lines from the server."""
         try:
             while self.is_connected():
                 line_bytes = await self._reader.readline()
@@ -86,52 +112,57 @@ class IrisConnector(Connector):
                     break
                 
                 line = line_bytes.decode('utf-8').strip()
+                if not line:
+                    continue
+                
                 logger.debug(f"<<< RECV: {line}")
                 
                 parts = line.split(maxsplit=2)
                 if not parts or not parts[0].isdigit():
-                    logger.warning(f"Received non-standard line: {line}")
+                    if line.upper().startswith("0 EVENT"):
+                        logger.info(f"Received asynchronous event: {line}")
+                        await self.event_queue.put(line)
+                    else:
+                        logger.warning(f"Received non-standard line: {line}")
                     continue
 
                 tx_id = int(parts[0])
                 future = self._pending_requests.get(tx_id)
 
                 if not future or future.done():
-                    # Asynchronous message (EVENT) or response to a cancelled request
                     continue
 
                 command = parts[1]
                 payload = parts[2] if len(parts) > 2 else ""
 
+                if not hasattr(future, 'collected_data'):
+                    future.collected_data = []
+
                 if command == "DATA":
-                    # Simple implementation - we assume that DATA INLINE is the last piece of data
-                    # In more complex cases, the Future could collect data
                     if "INLINE" in payload:
-                        value = payload.split('=', 1)[-1]
-                        if value == "NULL":
-                            future.set_result(None)
-                        elif value in ["BUSY", "DENIED", "UNKNOWN"]:
-                            future.set_exception(PilarError(tx_id, f"DATA error: {value}"))
-                        else:
-                            future.set_result(value)
-                elif command == "COMMAND" and payload == "COMPLETE":
-                    if not future.done():
-                        # If the SET command did not return DATA, we return success
-                        future.set_result("OK")
-                    # The request is complete, but we don't remove it, waiting for potential data
-                elif command == "COMMAND" and "ERROR" in payload:
-                    future.set_exception(PilarError(tx_id, f"COMMAND error: {payload}"))
+                        future.collected_data.append(payload)
+                elif command == "COMMAND":
+                    if payload == "COMPLETE":
+                        if not future.done():
+                            result = future.collected_data if future.collected_data else "OK"
+                            future.set_result(result)
+                    elif "ERROR" in payload or "FAILED" in payload:
+                        if not future.done():
+                            future.set_exception(PilarError(tx_id, f"COMMAND error: {payload}"))
                 elif command == "DATA" and "ERROR" in payload:
-                    future.set_exception(PilarError(tx_id, f"DATA error: {payload}"))
+                     if not future.done():
+                        future.set_exception(PilarError(tx_id, f"DATA error: {payload}"))
+
         except ConnectionResetError:
             logger.error("Connection was reset by the peer.")
         except Exception as e:
-            logger.error(f"Error in response reader loop: {e}", exc_info=True)
+            if not isinstance(e, asyncio.CancelledError):
+                logger.error(f"Error in response reader loop: {e}", exc_info=True)
         finally:
-            asyncio.create_task(self.close())
+            if self.is_connected():
+                asyncio.create_task(self.close())
 
-    async def _execute_command(self, command_string: str) -> any:
-        """Creates a Future, sends a TPL2 command, and waits for it to be resolved."""
+    async def _execute_command(self, command_string: str) -> Any:
         if not self.is_connected():
             raise RequestConnectionError("Not connected.")
 
@@ -145,27 +176,38 @@ class IrisConnector(Connector):
         try:
             self._writer.write(full_command.encode('utf-8'))
             await self._writer.drain()
-            # Wait for the result from the reading loop
             return await asyncio.wait_for(future, timeout=30.0)
         except asyncio.TimeoutError:
-            self._pending_requests.pop(tx_id, None)
             raise PilarError(-1, f"Command timeout for tx_id {tx_id}: {command_string}")
         finally:
             self._pending_requests.pop(tx_id, None)
 
-    async def get(self, component: 'Component', variable: str, kind: str = None, **data) -> any:
-        """Sends a GET command in TPL2 format."""
+    async def get(self, component: 'Component', variable: str, kind: str = None, **data) -> Any:
         object_path = f"{kind}.{variable}" if kind else f"{component.kind}.{variable}"
         command = f"GET {object_path}"
-        return await self._execute_command(command)
+        response = await self._execute_command(command)
+        
+        if isinstance(response, list):
+            parsed_data = {}
+            for item in response:
+                try:
+                    key, value = item.split('=', 1)[0].split(' ')[-1], item.split('=', 1)[1]
+                    if value in ["BUSY", "DENIED", "UNKNOWN"]:
+                        parsed_data[key] = PilarError(0, f"DATA error: {value}")
+                    else:
+                        parsed_data[key] = value.strip('"') if value.startswith('"') and value.endswith('"') else value
+                except IndexError:
+                    continue # Ignore malformed data lines
+            return parsed_data if len(parsed_data) > 1 else list(parsed_data.values())[0]
 
-    async def put(self, component: 'Component', variable: str, kind: str = None, **data) -> any:
-        """Sends a SET command in TPL2 format."""
+        return response
+
+
+    async def put(self, component: 'Component', variable: str, kind: str = None, **data) -> Any:
         object_path = f"{kind}.{variable}" if kind else f"{component.kind}.{variable}"
         value = data.get('value')
 
         if isinstance(value, str):
-            # Strings must be in quotes according to TPL2
             value_str = f'"{value}"'
         else:
             value_str = str(value)
