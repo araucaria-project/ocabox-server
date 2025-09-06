@@ -175,5 +175,40 @@ possible to configure it individually. If it is missing, it will be taken from t
 Some modules have an address that is used in requests to redirect them to the right place. For this reason, the very 
 construction of the tree depends on how the queries sent by clients will look like.
 
+### Working Principle
+
+**Request-Response Architecture:**
+- Clients send requests to the router (default port 5559)
+- Router processes requests through a hierarchical tree of specialized modules
+- Each request gets exactly one response
+- Uses ZMQ protocol for network communication
+
+**Tree-Based Processing:**
+The core innovation is a **tree of interconnected modules** where each handles specific aspects:
+
+- **TreeProvider** nodes serve as entry points for different observatory targets (`sim`, `dev`, `global`)
+- **TreeAlpacaObservatory** interfaces with ALPACA protocol telescope servers
+- **TreeCache** reduces telescope server load by caching frequently requested data
+- **TreeConditionalFreezer** handles timeout scenarios and data staleness
+- **TreeBaseRequestBlocker** provides access control (whitelists/blacklists)
+- **TreePlanExecutor** manages observation sequences
+- **TreeEphemeris** provides astronomical calculations
+
+**Request Flow:**
+1. Client request → Router → RequestSolver
+2. RequestSolver routes to appropriate TreeProvider based on target
+3. Request flows down the tree through brokers, caches, and specialized components
+4. Eventually reaches telescope hardware via ALPACA protocol
+5. Response flows back up the tree with potential caching/processing
+6. Final response sent back to client
+
+**Configuration-Driven:**
+- Tree structure defined by build scripts (`tree_build_example.py`)
+- YAML configuration controls module parameters and routing
+- Supports multiple observatories/targets in a single server instance
+
+This design allows the server to act as an intelligent proxy that can cache telescope data, control access, execute complex observation plans, and provide a unified interface to diverse astronomical equipment while reducing load on the actual telescope control systems.
+
+
 ## License
 The [MIT](LICENSE) License

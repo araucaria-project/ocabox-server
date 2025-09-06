@@ -1,6 +1,7 @@
 LOG_LEVEL: INFO
 
 OCABOX_BUILD_FILE_NAME: "tree_build_example.py"   # file name witch tree build plans, this property can be set only in configuration/config.yaml or environment property
+OCABOX_VERSION: "2"
 
 nats:
   host: "localhost"
