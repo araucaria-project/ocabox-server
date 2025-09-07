@@ -62,11 +62,24 @@ def tree_build() -> Router:
     conditional_freezer_dev = TreeConditionalFreezer('conditional-freezer-dev', cache_dev)
     target_provider_dev = TreeProvider('target-provider-dev', 'dev', conditional_freezer_dev)
 
+    # --------------------------------------- dummytest ---------------------------------------
+    alpaca_dummytest = TreeAlpacaObservatory('alpaca-dummytest', observatory_name='dummytest')
+    alpaca_blocker_dummytest = TreeBaseRequestBlocker('alpaca-blocker-dummytest', alpaca_dummytest)
+    blocker_grantor_dummytest = TreeBlockerAccessGrantor('access-grantor-dummytest', 'access_grantor', alpaca_blocker_dummytest)
+    plan_executor_dummytest = TreePlanExecutor('executor-dummytest', 'executor')
+    broker_components_dummytest = TreeBaseBrokerDefaultTarget('broker-components-dummytest',
+                                                             [blocker_grantor_dummytest, plan_executor_dummytest],
+                                                             default_provider=alpaca_blocker_dummytest)
+    cache_dummytest = TreeCache('cache-dummytest', broker_components_dummytest)
+    conditional_freezer_dummytest = TreeConditionalFreezer('conditional-freezer-dummytest', cache_dummytest)
+    target_provider_dummytest = TreeProvider('target-provider-dummytest', 'dummytest', conditional_freezer_dummytest)
+
 
     # -----------------------------gather alpacas components -----------------------------
     broker_front_oca = TreeBaseBroker('broker-front-oca',[
                                        target_provider_sim,
                                        target_provider_dev,
+                                       target_provider_dummytest,
                                        target_provider_global
     ])
 

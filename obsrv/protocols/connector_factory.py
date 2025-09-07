@@ -39,6 +39,13 @@ def _load_all_protocols():
     except ImportError:
         pass
     
+    # Try to load Dummy protocol (for testing)
+    try:
+        from obsrv.protocols.dummy.dummy_connector import DummyConnector
+        classes['dummy'] = DummyConnector
+    except ImportError:
+        pass
+    
     return classes
 
 

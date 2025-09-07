@@ -1,5 +1,53 @@
 # ocabox-server
 
+**Middleware API for astronomical telescope systems** - Acts as a single point of access for multiple telemetry tools and systems used in astronomical research, providing intelligent caching, protocol abstraction, and unified access to diverse astronomical equipment.
+
+## OCABox Project Family
+
+This repository is part of the **OCABox ecosystem** - a comprehensive suite of tools for astronomical telescope control:
+
+- **[ocabox-common](https://github.com/araucaria-project/ocabox-common)** - Shared libraries and protocols used by both client and server components
+- **[ocabox](https://github.com/araucaria-project/ocabox)** - Python client library with easy-to-use API classes (`ocaboxapi`) for connecting to ocabox-server
+- **[ocabox-server](https://github.com/araucaria-project/ocabox-server)** - This project: the middleware server that interfaces with telescope hardware
+- **[ocabox-cli](https://github.com/araucaria-project/ocabox-cli)** - Full-featured command-line interface client for telescope control
+
+### Architecture Overview
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   ocabox-cli    │    │   your-client   │    │  other-clients  │
+│  (CLI client)   │    │ (custom client) │    │  (web, mobile)  │
+└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+          │                      │                      │
+          └──────────────────────┼──────────────────────┘
+                                 │
+              ┌──────────────────────────────────────┐
+              │          ocaboxapi Library           │
+              │     (Python Client Library)          │
+              │  • Observatory, Telescope classes    │
+              │  • Mount, Camera, Dome APIs          │
+              │  • High-level abstractions           │
+              └──────────────────┬───────────────────┘
+                                 │
+                    ┌────────────┴───────────────┐
+                    │     ocabox-server          │
+                    │   (this repository)        │
+                    │                            │
+                    │  Multi-Protocol Support:   │
+                    │  • ALPACA                  │
+                    │  • Pillar (IRIS)           │
+                    │  • BESO                    │  
+                    │  • IRIS CCD                │
+                    │  • Dummy (testing)         │
+                    └─────────────┬──────────────┘
+                                  │
+                    ┌─────────────┴───────────────┐
+                    │     Telescope Hardware      │
+                    │   • Mounts  • Cameras       │
+                    │   • Domes   • Focusers      │
+                    │   • etc.    • etc.          │
+                    └─────────────────────────────┘
+```
+
 The aim of the project was to create a single API to support many telemetry tools and systems used in astronomical
 research. Initially, the project was to mediate in the exchange of data between users and the local server managing
 the astronomical telescope. At the same time, by using caching in the program, it was supposed to relieve the server
