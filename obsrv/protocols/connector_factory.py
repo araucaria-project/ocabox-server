@@ -20,8 +20,8 @@ def _load_all_protocols():
     
     # Try to load Pillar protocol
     try:
-        from obsrv.protocols.pillar.pillar_connector import PillarConnector
-        classes['pillar'] = PillarConnector
+        from obsrv.protocols.pilar.pilar_connector import PilarConnector
+        classes['pilar'] = PilarConnector
     except ImportError:
         pass
     
