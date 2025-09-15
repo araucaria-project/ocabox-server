@@ -1,0 +1,40 @@
+settings:
+  connection_pool_size: 10
+  id_pool_range: [101, 10000]
+  timeouts:
+    connection: 10.0
+    get_command: 10.0
+    set_command: 120.0
+    pool_get: 5.0
+
+mappings:
+  commands:
+    telescope:
+      rightascension: "OBJECT.EQUATORIAL.RA"
+      declination: "OBJECT.EQUATORIAL.DEC"
+      azimuth: "OBJECT.INSTRUMENTAL.AZ"
+      altitude: "OBJECT.INSTRUMENTAL.ALT"
+      tracking: "POINTING.TRACK"
+    focuser:
+      position: "POINTING.SETUP.FOCUS.POSITION"
+    covercalibrator:
+      coverstate: "AUXILIARY.COVER.TARGETPOS"
+
+  resource_locks:
+    "OBJECT.EQUATORIAL.RA": "MOUNT_SLEW"
+    "OBJECT.EQUATORIAL.DEC": "MOUNT_SLEW"
+    "POINTING.TRACK": "MOUNT_SLEW"
+    "POINTING.SETUP.FOCUS.POSITION": "FOCUSER_MOTOR"
+    "AUXILIARY.COVER.TARGETPOS": "COVER_MOTOR"
+
+actions:
+  slewtocoordinates:
+    - component: "telescope"
+      variable: "rightascension"
+      value: "{RightAscension}"
+    - component: "telescope"
+      variable: "declination"
+      value: "{Declination}"
+    - component: "telescope"
+      variable: "tracking"
+      value: 1
