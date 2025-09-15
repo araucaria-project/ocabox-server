@@ -8,7 +8,7 @@ All notable changes to this project will be documented in this file.
 - Refactor to be non-alpaca dependend
 - directory structure refactored
 ### Added
-- Support for non-alpaca components: Pillar, BESO, IRIS, etc. 
+- Support for non-alpaca components: Pilar, BESO, IRIS, etc. 
 ### Removed
 - Resource manager
 - Program runner
