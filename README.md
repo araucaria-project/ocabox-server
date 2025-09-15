@@ -34,7 +34,7 @@ This repository is part of the **OCABox ecosystem** - a comprehensive suite of t
                     │                            │
                     │  Multi-Protocol Support:   │
                     │  • ALPACA                  │
-                    │  • Pillar (IRIS)           │
+                    │  • Pilar (IRIS)           │
                     │  • BESO                    │  
                     │  • IRIS CCD                │
                     │  • Dummy (testing)         │
