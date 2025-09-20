@@ -1,0 +1,26 @@
+settings:
+  packet_size: 1024
+  command_timeout: 5.0
+
+mappings:
+  commands:
+    camera:
+      camerastate:
+        command: "sync"
+    filterwheel:
+      position:
+        command: "filter"
+        get_arg: "status"
+
+  actions:
+    startexposure:
+      - command: "et"
+        value: "{Duration}"
+      - command: "go"
+        value: null
+    stopexposure:
+      - command: "clear"
+        value: null
+    startdownload:
+      - command: "xfer"
+        value: "{filename}"
