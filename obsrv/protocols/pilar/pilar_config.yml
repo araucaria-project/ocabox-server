@@ -7,34 +7,158 @@ settings:
     set_command: 120.0
     pool_get: 5.0
 
-mappings:
-  commands:
-    telescope:
+components:
+  focuser:
+    mappings:
+      position: "POINTING.SETUP.FOCUS.POSITION"
+      tempcomp: "POINTING.SETUP.FOCUS.TEMPCOMP"
+      ismoving: "POINTING.SETUP.FOCUS.ISMOVING"
+      fansstatus: "AUXILIARY.FANS.STATUS"
+      halt: "POINTING.SETUP.FOCUS.HALT"
+    actions:
+      fansturnon:
+        - variable: "fansstatus"
+          value: "ON"
+      fansturnoff:
+        - variable: "fansstatus"
+          value: "OFF"
+      move:
+        - variable: "position"
+          value: "{Position}"
+
+  telescope: # 'telescope' jest używane jako standardowa nazwa dla komponentu 'mount'
+    reading:
       rightascension: "OBJECT.EQUATORIAL.RA"
       declination: "OBJECT.EQUATORIAL.DEC"
       azimuth: "OBJECT.INSTRUMENTAL.AZ"
       altitude: "OBJECT.INSTRUMENTAL.ALT"
+      athome: "POINTING.STATE.ATHOME"
+      atpark: "POINTING.STATE.ATPARK"
+      slewing: "POINTING.STATE.SLEWING"
       tracking: "POINTING.TRACK"
-    focuser:
-      position: "POINTING.SETUP.FOCUS.POSITION"
-    covercalibrator:
-      coverstate: "AUXILIARY.COVER.TARGETPOS"
+      ispulseguiding: "POINTING.STATE.PULSEGUIDING"
+      motorstatus: "MOTORS.STATUS"
+      errorstring: "SYSTEM.ERROR.STRING"
+      sideofpier: "POINTING.STATE.SIDEOFPIER"
+    actions:
+      slewtocoordinates:
+        - variable: "rightascension"
+          value: "{RightAscension}"
+        - variable: "declination"
+          value: "{Declination}"
+      slewtocoordinatesasync:
+        - variable: "rightascension"
+          value: "{RightAscension}"
+        - variable: "declination"
+          value: "{Declination}"
+      slewtoaltaz:
+        - variable: "azimuth"
+          value: "{Azimuth}"
+        - variable: "altitude"
+          value: "{Altitude}"
+      slewtoaltazasync:
+        - variable: "azimuth"
+          value: "{Azimuth}"
+        - variable: "altitude"
+          value: "{Altitude}"
+      abortslew:
+        - variable: "slewing"
+          value: "ABORT"
+      park:
+        - variable: "atpark"
+          value: "PARK"
+      unpark:
+        - variable: "atpark"
+          value: "UNPARK"
+      findhome:
+        - variable: "athome"
+          value: "FINDHOME"
+      motoron:
+        - variable: "motorstatus"
+          value: "ON"
+      motoroff:
+        - variable: "motorstatus"
+          value: "OFF"
+      pulseguide:
+        - variable: "ispulseguiding"
+          value: "{Direction},{Duration}"
 
-  resource_locks:
-    "OBJECT.EQUATORIAL.RA": "MOUNT_SLEW"
-    "OBJECT.EQUATORIAL.DEC": "MOUNT_SLEW"
-    "POINTING.TRACK": "MOUNT_SLEW"
-    "POINTING.SETUP.FOCUS.POSITION": "FOCUSER_MOTOR"
-    "AUXILIARY.COVER.TARGETPOS": "COVER_MOTOR"
+  rotator:
+    reading:
+      ismoving: "ROTATOR.STATE.ISMOVING"
+      mechanicalposition: "ROTATOR.POSITION.MECHANICAL"
+      position: "ROTATOR.POSITION.SKY"
+      reverse: "ROTATOR.CONFIG.REVERSE"
+      stepsize: "ROTATOR.CONFIG.STEPSIZE"
+      targetposition: "ROTATOR.POSITION.TARGET"
+      halt: "ROTATOR.COMMAND.HALT"
+    actions:
+      move:
+        - variable: "position" # Ruch względny
+          value: "REL:{Position}"
+      moveabsolute:
+        - variable: "position" # Ruch absolutny
+          value: "{Position}"
+      movemechanical:
+        - variable: "mechanicalposition"
+          value: "{Position}"
+      sync:
+        - variable: "position"
+          value: "SYNC:{Position}"
 
-actions:
-  slewtocoordinates:
-    - component: "telescope"
-      variable: "rightascension"
-      value: "{RightAscension}"
-    - component: "telescope"
-      variable: "declination"
-      value: "{Declination}"
-    - component: "telescope"
-      variable: "tracking"
-      value: 1
+  covercalibratior:
+    mappings:
+      coverstate:
+      calibratorstate:
+      brightness:
+    actions:
+      opencover:
+        - variable: "coverstate"
+          value: "OPEN"
+      closecover:
+        - variable: "coverstate"
+          value: "CLOSED"
+      calibratoron:
+        - variable: "brightness"
+          value: "{Brightness}"
+        - variable: "calibratorstate"
+          value: "ON"
+      calibratoroff:
+        - variable: "calibratorstate"
+          value: "OFF"
+
+### Wersja pierwsza
+#  telescope:
+#    mappings:
+#      rightascension: "OBJECT.EQUATORIAL.RA"
+#      declination: "OBJECT.EQUATORIAL.DEC"
+#      tracking: "POINTING.TRACK"
+#      azimuth: "OBJECT.INSTRUMENTAL.AZ"
+#      altitude: "OBJECT.INSTRUMENTAL.ALT"
+#    actions:
+#      slewtocoordinates:
+#        - variable: "rightascension"
+#          value: "{RightAscension}"
+#        - variable: "declination"
+#          value: "{Declination}"
+#        - variable: "tracking"
+#          value: 1
+
+resource_locks:
+  "POINTING.SETUP.FOCUS.POSITION": "FOCUSER_MOTOR"
+  "POINTING.SETUP.FOCUS.HALT": "FOCUSER_MOTOR"
+  "AUXILIARY.FANS.STATUS": "FANS_CONTROL"
+  "AUXILIARY.COVER.STATE": "COVER_MOTOR"
+  "AUXILIARY.CALIBRATOR.STATE": "CALIBRATOR_LAMP"
+  "AUXILIARY.CALIBRATOR.BRIGHTNESS": "CALIBRATOR_LAMP"
+  "OBJECT.EQUATORIAL.RA": "MOUNT_SLEW"
+  "OBJECT.EQUATORIAL.DEC": "MOUNT_SLEW"
+  "OBJECT.INSTRUMENTAL.AZ": "MOUNT_SLEW"
+  "OBJECT.INSTRUMENTAL.ALT": "MOUNT_SLEW"
+  "POINTING.TRACK": "MOUNT_STATE"
+  "POINTING.STATE.ATPARK": "MOUNT_STATE"
+  "POINTING.STATE.ATHOME": "MOUNT_STATE"
+  "MOTORS.STATUS": "MOUNT_MOTORS"
+  "ROTATOR.POSITION.SKY": "ROTATOR_MOTOR"
+  "ROTATOR.POSITION.MECHANICAL": "ROTATOR_MOTOR"
+  "ROTATOR.COMMAND.HALT": "ROTATOR_MOTOR"
