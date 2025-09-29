@@ -57,6 +57,7 @@ class PilarConnector(Connector):
         try:
             config = confuse.Configuration('PilarConnector', __name__)
             config.set_file(CONFIG_PATH)
+
             self._pool_size = config['settings']['connection_pool_size'].get(int)
             id_range_list = config['settings']['id_pool_range'].get(list)
             self._id_range = (id_range_list[0], id_range_list[1])
@@ -66,10 +67,21 @@ class PilarConnector(Connector):
                 "set": config['settings']['timeouts']['set_command'].get(float),
                 "pool_get": config['settings']['timeouts']['pool_get'].get(float),
             }
-            self._command_map = config['mappings']['commands'].get(dict)
-            self._resource_lock_map = config['mappings']['resource_locks'].get(dict)
-            self._actions_map = config['actions'].get(dict)
+
+            self._resource_lock_map = config['resource_locks'].get(dict)
+
+            self._command_map = {}
+            self._actions_map = {}
+
+            if 'components' in config:
+                for component_name, component_config in config['components'].get().items():
+                    if 'mappings' in component_config:
+                        self._command_map[component_name] = component_config['mappings']
+                    if 'actions' in component_config:
+                        self._actions_map[component_name] = component_config['actions']
+
             logger.info("Pilar configuration loaded successfully.")
+
         except (confuse.ConfigReadError, FileNotFoundError) as e:
             logger.error(f"CRITICAL: Could not read Pilar config file at {CONFIG_PATH}. Error: {e}")
             raise RuntimeError("Pilar connector configuration is missing or corrupted.") from e
@@ -166,14 +178,16 @@ class PilarConnector(Connector):
             return {"status": "failed", "error": str(e)}
 
     async def call(self, component: 'Component', function: str, **data):
-        action_steps = self._actions_map.get(function)
+        action_steps = self._actions_map.get(component.kind, {}).get(function)
+
         if not action_steps:
-            logger.warning(f"Unknown Pilar action called: {function}")
+            logger.warning(f"Unknown Pilar action called: {function} for component {component.kind}")
             return {"status": "unknown_function"}
+
         logger.info(f"Executing Pilar action: {function} with data {data}")
         try:
             for step in action_steps:
-                step_component_str = step['component']
+                step_component_kind = step.get('component', component.kind)
                 step_variable = step['variable']
                 step_value = step['value']
                 if isinstance(step_value, str) and step_value.startswith('{') and step_value.endswith('}'):
@@ -183,7 +197,10 @@ class PilarConnector(Connector):
                     final_value = data[arg_name]
                 else:
                     final_value = step_value
-                await self.put(component, step_variable, **{step_variable: final_value})
+                
+                target_component = component if step_component_kind == component.kind else component.root.component_by_absolute_sys_id(step_component_kind)
+                await self.put(target_component, step_variable, **{step_variable: final_value})
+
             return {"status": f"action_{function}_completed"}
         except Exception as e:
             logger.error(f"Pilar CALL failed for action {function}: {e}")
