@@ -51,7 +51,8 @@ class TreeBaseRequestBlocker(TreeBaseProvider):
             raise TreeStructureError
 
         # request witch special flag - can go ahead
-        if self._check_has_param(request=request) and isinstance(request.user, TreeServiceUser):
+        # from 2.1.0 TreeServiceUser is no longer required to bypass the blocker
+        if self._check_has_param(request=request):  # and isinstance(request.user, TreeServiceUser):
             logger.debug("Retrieved a message with a flag was bypassing the TreeBaseRequestBlocker")
             raise TreeStructureError
 

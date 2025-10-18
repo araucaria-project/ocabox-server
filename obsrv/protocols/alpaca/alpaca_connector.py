@@ -3,6 +3,12 @@ import random
 import aiohttp as aiohttp
 import logging
 from typing import Iterable, Callable, Tuple
+
+from aiohttp import ServerConnectionError, ClientConnectionError
+from obcom.data_colection.address import AddressError
+from obcom.data_colection.coded_error import TreeOtherError
+from obcom.data_colection.value import TreeValueError
+
 from obsrv.protocols.alpaca.alpaca_exceptions import AlpacaError, AlpacaHttpError, RequestConnectionError, \
     AlpacaHttp400Error, AlpacaHttp500Error, AlpacaContentTypeError
 
@@ -141,7 +147,7 @@ class AlpacaConnector(Connector):
             'driverversion',
             'interfaceversion',
         ]
-        from .observatory import _component_classes
+        from obsrv.telescope_devices.device_tree import _component_classes
         alpaca_devices = _component_classes.keys()
         devices = []
 
@@ -218,8 +224,13 @@ class AlpacaConnector(Connector):
         :raise RequestConnectionError: when can not connect to alpaca
         :return: requested value or none
         """
-        url = self._url(component=component, variable=variable, kind=kind)
-        return await self._get(url, **data)
+        url = None
+        try:
+            url = self._url(component=component, variable=variable, kind=kind)
+            resp = await self._get(url, **data)
+            return resp
+        except Exception as e:
+            self.raise_tree_exeption(e, address=url)
 
     async def put(self, component: 'Component', variable: str, kind=None, **data):
         """
@@ -236,8 +247,61 @@ class AlpacaConnector(Connector):
         :raise RequestConnectionError: when can not connect to alpaca
         :return: response or none
         """
-        url = self._url(component=component, variable=variable, kind=kind)
-        return await self._put(url, **data)
+
+        url = None
+        try:
+            url = self._url(component=component, variable=variable, kind=kind)
+            resp = await self._put(url, **data)
+            return resp
+        except Exception as e:
+            self.raise_tree_exeption(e, address=url)
+
+    def raise_tree_exeption(self, exception: Exception, address: str | None):
+        try:
+            raise exception
+        except asyncio.CancelledError:
+            raise
+        except AlpacaHttp400Error as e:
+            # if server alpaca return 400 error
+            logger.warning(f"Alpaca throw error 400 for request {address}")
+            raise TreeValueError(address=None, code=2002, message=e.message)
+        except AlpacaHttp500Error as e:
+            # if server alpaca return 500 error
+            logger.warning(f"Alpaca throw error 500 for request {address}")
+            raise TreeValueError(address=None, code=2002, message=e.message)
+        except AlpacaContentTypeError as e:
+            # if server alpaca return data in wrong format
+            logger.warning(f"Alpaca throw error AlpacaContentTypeError for request {address}")
+            raise TreeValueError(address=None, code=2002, message=e.message)
+        except AlpacaError as e:
+            # when server alpaca throws an error with a numeric value
+            logger.warning(f"Alpaca throw numeric error for request {address}")
+            raise TreeValueError(address=None, code=2002, message=e.message)
+        except AlpacaHttpError as e:
+            # if server alpaca return unresolved error
+            logger.warning(f"Alpaca throw AlpacaHttpError for request {address}")
+            raise TreeValueError(address=None, code=2002, message=e.message)
+        except RequestConnectionError:
+            # when can not connect to alpaca
+            logger.warning(f"Server alpaca is not responding at {address}")
+            raise TreeOtherError(address=None, code=4005, message=f"Server alpaca is not responding at {address}",
+                                 severity=TreeOtherError.SEVERITY_TEMPORARY)
+        except asyncio.TimeoutError:
+            # Catching error TimeoutError does NOT conflict with the main timeout on task in Router
+            logger.warning(f"Server alpaca is not responding at address {address} before timeout")
+            raise TreeOtherError(address=None, code=4005, message=f"Server alpaca is not responding at {address}",
+                                 severity=TreeOtherError.SEVERITY_TEMPORARY)
+        except (TypeError, ValueError):
+            # when given arguments is wrong
+            logger.warning(f"Alpaca driver get wrong arguments to run function")
+            raise AddressError(address=address, code=1003, message=f"Wrong arguments for method")
+        except ServerConnectionError as e:
+            logger.warning(f"AioHTTP error throw error {str(e)} for request {address}")
+            raise TreeValueError(address=None, code=2002, message=str(e), severity=TreeOtherError.SEVERITY_TEMPORARY)
+        except ClientConnectionError as e:
+            logger.warning(f"AioHTTP error throw error {str(e)} for request {address}")
+            raise TreeValueError(address=None, code=2002, message=str(e))
+
 
     async def _put(self, url, **data):
         """

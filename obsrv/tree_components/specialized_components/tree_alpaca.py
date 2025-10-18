@@ -6,6 +6,7 @@ import logging
 import time
 
 from obcom.data_colection.address import AddressError
+from obcom.data_colection.coded_error import BaseCodedError
 from obcom.data_colection.value import Value, TreeValueError
 from obcom.data_colection.value_call import ValueRequest
 
@@ -99,6 +100,8 @@ class TreeAlpacaObservatory(TreeBaseProvider):
             
         except KeyError:
             raise AddressError(address=address, code=1002, message="Observatory component not found")
+        except BaseCodedError:
+            raise
         except Exception as e:
             logger.warning(f"Observatory error for {address}: {e}")
             raise TreeValueError(address=None, code=2002, message=str(e))
