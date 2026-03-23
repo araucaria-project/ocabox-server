@@ -3,6 +3,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.2.0]
+### Fixed
+- Ensure `_on_subcontractor_return` is always called in `TreeBaseProvider`, preventing stale CyclicQuery cache
+- Guard `_on_subcontractor_return` against its own exceptions so they do not replace the computed response
+### Changed
+- Directory structure: `comunication` → `communication`, `data_colection` → `data_collection`, `specialistic` → `specialized`
+- Reorganized tree components, telescope devices, protocols, and utils into clean purpose-driven directories
+
+## [2.1.1]
+### Changed
+- Dependencies version bump
+- Restored proper error handling
+
+## [2.1.0]
+### Added
+- Pilar protocol connector and configuration
+- IRIS CCD protocol connector and configuration
+- BESO spectrograph protocol connector
+- Dummy protocol connector for testing
+- Universal connector factory for multi-protocol support
+
 ## [2.0.0]
 ### Changed
 - Refactor to be non-alpaca dependend
