@@ -1,19 +1,12 @@
-version: '3.9'
-
-networks:
-  ocabox-network:
-    driver: bridge
-
 services:
   ocabox:
+    network_mode: host
     build:
       context: ./
       args:
-        OCABOX_ROUTER_PORT: ${OCABOX_ROUTER_PORT}
+        OCABOX_ROUTER_PORT: ${OCABOX_ROUTER_PORT:-5559}
+    environment:
+      - OCABOX_ROUTER_PORT=${OCABOX_ROUTER_PORT:-5559}
     stop_signal: SIGINT
-    ports:
-      - ${OCABOX_ROUTER_PORT}:${OCABOX_ROUTER_PORT}
     volumes:
-      - './obsrv/comunication/:/obsrv/comunication/'
-    networks:
-      - ocabox-server-network
+      - './obsrv/communication/:/obsrv/communication/'

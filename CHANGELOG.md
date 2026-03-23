@@ -3,6 +3,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.0.0]
+### Changed
+- Refactor to be non-alpaca dependend
+- directory structure refactored
+### Added
+- Support for non-alpaca components: Pilar, BESO, IRIS, etc. 
+### Removed
+- Resource manager
+- Program runner
+ 
+
 ## [1.0.4]
 ### Changed
 - Python 3.10 required
