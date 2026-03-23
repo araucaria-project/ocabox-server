@@ -186,6 +186,32 @@ class TreeBaseProviderTest(unittest.TestCase):
         self.assertTrue(_TrackingProvider.on_subcontractor_return_called,
                         "_on_subcontractor_return must be called even when subcontractor has no get_response()")
 
+    def test_get_response_on_subcontractor_return_exception_does_not_replace_result(self):
+        """
+        Test that an exception raised inside _on_subcontractor_return does not propagate to the
+        caller and does not replace the already-computed ValueResponse.
+        """
+
+        class _SucceedingSubcontractor:
+            async def get_response(self, request):
+                from obcom.data_colection.value import Value
+                return ValueResponse(request.address, Value(42, 1661349399.0), True)
+
+        class _RaisingOnReturnProvider(TreeBaseProvider):
+            async def _on_subcontractor_return(self, result: ValueResponse, request: ValueRequest):
+                raise RuntimeError("cleanup failure")
+
+        tbp = _RaisingOnReturnProvider('raising_on_return_provider', _SucceedingSubcontractor())
+
+        request = ValueRequest('.'.join([self.sample_address_prefix, 'some_source', 'some_val']),
+                               self.v1[1].ts, 20)
+        request.index = self.start_index
+        # Should not raise; the ValueResponse from the subcontractor should be returned.
+        response = asyncio.run(tbp.get_response(request))
+
+        self.assertTrue(response.status)
+        self.assertIsNotNone(response.value)
+
 
 if __name__ == '__main__':
     unittest.main()

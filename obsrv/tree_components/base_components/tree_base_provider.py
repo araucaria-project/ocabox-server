@@ -92,7 +92,12 @@ class TreeBaseProvider(TreeComponent, ABC):
                     return result
                 finally:
                     if result is not None:
-                        await self._on_subcontractor_return(result, request)
+                        try:
+                            await self._on_subcontractor_return(result, request)
+                        except Exception as cleanup_err:
+                            logger.warning(
+                                f"_on_subcontractor_return failed for {request.address}: {cleanup_err}"
+                            )
             else:
                 # This provider doesn't provide response and there is no next provider
                 re = ResponseError(3001, '', repr(self), ResponseError.SEVERITY_CRITICAL)
