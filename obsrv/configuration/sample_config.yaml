@@ -1,3 +1,5 @@
+OCABOX_VERSION: "2"
+
 tree:
   sim:
     observatory:
@@ -144,6 +146,57 @@ tree:
               style: { color: '#FC62CE' }
               focus_offset: 10
               modifier: none
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
+          device_number: 0
+
+  dummytest:
+    observatory:
+      comment: Test telescope with dummy protocol mount
+      flags: [ 'dev' ] # telescope is only in dev mode
+      lon: -70.19638    # OCA
+      lat: -24.59806
+      elev: 2817  # m
+      epoch: 2000
+      protocol: alpaca  # default protocol
+      address: http://localhost:80/api/v1
+      style: { color: '#00FF00' }  # green
+      components:
+        mount:
+          kind: telescope
+          device_number: 0
+          type: az
+          protocol: dummy  # override to dummy protocol for testing
+          min_alt: 14.9 # deg
+          max_alt: 90.0 # deg
+          obs_min_alt: 35.0 # deg
+          slew_timeout: 120
+        derotator:
+          kind: rotator
+          device_number: 0
+        focuser:
+          kind: focuser
+          device_number: 0
+          move_tolerance: 5
+        dome:
+          kind: dome
+          device_number: 0
+          slew_tolerance: 3.0 # deg
+          follow_tolerance: 3.0 # deg
+          slew_timeout: 120
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+        camera:
+          kind: camera
+          device_number: 0
+        filterwheel:
+          kind: filterwheel
+          device_number: 0
+          filters: {}  # optional
         switch:
           kind: switch
           device_number: 0

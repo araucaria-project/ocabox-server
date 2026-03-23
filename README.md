@@ -1,5 +1,53 @@
 # ocabox-server
 
+**Middleware API for astronomical telescope systems** - Acts as a single point of access for multiple telemetry tools and systems used in astronomical research, providing intelligent caching, protocol abstraction, and unified access to diverse astronomical equipment.
+
+## OCABox Project Family
+
+This repository is part of the **OCABox ecosystem** - a comprehensive suite of tools for astronomical telescope control:
+
+- **[ocabox-common](https://github.com/araucaria-project/ocabox-common)** - Shared libraries and protocols used by both client and server components
+- **[ocabox](https://github.com/araucaria-project/ocabox)** - Python client library with easy-to-use API classes (`ocaboxapi`) for connecting to ocabox-server
+- **[ocabox-server](https://github.com/araucaria-project/ocabox-server)** - This project: the middleware server that interfaces with telescope hardware
+- **[ocabox-cli](https://github.com/araucaria-project/ocabox-cli)** - Full-featured command-line interface client for telescope control
+
+### Architecture Overview
+```
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   ocabox-cli    │    │   your-client   │    │  other-clients  │
+│  (CLI client)   │    │ (custom client) │    │  (web, mobile)  │
+└─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
+          │                      │                      │
+          └──────────────────────┼──────────────────────┘
+                                 │
+              ┌──────────────────────────────────────┐
+              │          ocaboxapi Library           │
+              │     (Python Client Library)          │
+              │  • Observatory, Telescope classes    │
+              │  • Mount, Camera, Dome APIs          │
+              │  • High-level abstractions           │
+              └──────────────────┬───────────────────┘
+                                 │
+                    ┌────────────┴───────────────┐
+                    │     ocabox-server          │
+                    │   (this repository)        │
+                    │                            │
+                    │  Multi-Protocol Support:   │
+                    │  • ALPACA                  │
+                    │  • Pilar (IRIS)           │
+                    │  • BESO                    │  
+                    │  • IRIS CCD                │
+                    │  • Dummy (testing)         │
+                    └─────────────┬──────────────┘
+                                  │
+                    ┌─────────────┴───────────────┐
+                    │     Telescope Hardware      │
+                    │   • Mounts  • Cameras       │
+                    │   • Domes   • Focusers      │
+                    │   • etc.    • etc.          │
+                    └─────────────────────────────┘
+```
+
 The aim of the project was to create a single API to support many telemetry tools and systems used in astronomical
 research. Initially, the project was to mediate in the exchange of data between users and the local server managing
 the astronomical telescope. At the same time, by using caching in the program, it was supposed to relieve the server
@@ -174,6 +222,41 @@ have special requirements for adjacency with other modules. Each module has a un
 possible to configure it individually. If it is missing, it will be taken from the values set for the given module type. 
 Some modules have an address that is used in requests to redirect them to the right place. For this reason, the very 
 construction of the tree depends on how the queries sent by clients will look like.
+
+### Working Principle
+
+**Request-Response Architecture:**
+- Clients send requests to the router (default port 5559)
+- Router processes requests through a hierarchical tree of specialized modules
+- Each request gets exactly one response
+- Uses ZMQ protocol for network communication
+
+**Tree-Based Processing:**
+The core innovation is a **tree of interconnected modules** where each handles specific aspects:
+
+- **TreeProvider** nodes serve as entry points for different observatory targets (`sim`, `dev`, `global`)
+- **TreeAlpacaObservatory** interfaces with ALPACA protocol telescope servers
+- **TreeCache** reduces telescope server load by caching frequently requested data
+- **TreeConditionalFreezer** handles timeout scenarios and data staleness
+- **TreeBaseRequestBlocker** provides access control (whitelists/blacklists)
+- **TreePlanExecutor** manages observation sequences
+- **TreeEphemeris** provides astronomical calculations
+
+**Request Flow:**
+1. Client request → Router → RequestSolver
+2. RequestSolver routes to appropriate TreeProvider based on target
+3. Request flows down the tree through brokers, caches, and specialized components
+4. Eventually reaches telescope hardware via ALPACA protocol
+5. Response flows back up the tree with potential caching/processing
+6. Final response sent back to client
+
+**Configuration-Driven:**
+- Tree structure defined by build scripts (`tree_build_example.py`)
+- YAML configuration controls module parameters and routing
+- Supports multiple observatories/targets in a single server instance
+
+This design allows the server to act as an intelligent proxy that can cache telescope data, control access, execute complex observation plans, and provide a unified interface to diverse astronomical equipment while reducing load on the actual telescope control systems.
+
 
 ## License
 The [MIT](LICENSE) License

@@ -38,11 +38,23 @@ def load_from_file(filename, method_name):
         raise RuntimeError
     return method_inst
 
+def _splash():
+    splash = r"""
+_/_/_/_/_/  _/_/_/    _/_/_/   
+   _/        _/    _/          
+  _/        _/    _/           
+ _/        _/    _/            
+_/      _/_/_/    _/_/_/   v2
+                           OCABOX Server       
+"""
+
+    print(splash)
 
 def main(argv=None):
     if argv is None:
         argv = sys.argv
 
+    _splash()
     try:
         level = SingletonConfig.get_config()['LOG_LEVEL'].get()
         if level is not None:
@@ -50,6 +62,14 @@ def main(argv=None):
             logging.getLogger().setLevel(level)
     except Exception:
         pass
+    try:
+        ocabox_version = SingletonConfig.get_config()['OCABOX_VERSION'].get()
+    except Exception:
+        ocabox_version = "1"
+    if ocabox_version[0] != '2':
+        logger.error(f"The version of the configuration is {ocabox_version}. Required version is 2. Check config.yaml, check tree_build.py, set OCABOX_VERSION in your config file")
+        logger.error(f"Note, that OCABOX Server 2 has different packages paths to be imported, e.g. obsrv.data_colection.specialistic_components is depreaced")
+        return 1
     try:
         BUILD_FILE = os.environ.get('OCABOX_BUILD_FILE_NAME', None)
         if BUILD_FILE is None:
