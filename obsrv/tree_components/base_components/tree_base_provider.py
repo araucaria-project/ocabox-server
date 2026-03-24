@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from abc import ABC
 
@@ -79,6 +80,8 @@ class TreeBaseProvider(TreeComponent, ABC):
                 try:
                     result = await self._subcontractor.get_response(request)
                     return result
+                except asyncio.CancelledError:
+                    raise
                 except AttributeError:
                     re = ResponseError(3002, '', repr(self), ResponseError.SEVERITY_CRITICAL)
                     logger.warning(f"Provider try call subcontractor but he doesn't has method get_response()")
@@ -94,6 +97,8 @@ class TreeBaseProvider(TreeComponent, ABC):
                     if result is not None:
                         try:
                             await self._on_subcontractor_return(result, request)
+                        except asyncio.CancelledError:
+                            raise
                         except Exception as cleanup_err:
                             logger.warning(
                                 f"_on_subcontractor_return failed for {request.address}: {cleanup_err}"
