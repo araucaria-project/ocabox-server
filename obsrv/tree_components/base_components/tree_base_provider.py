@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from abc import ABC
 
@@ -75,14 +76,33 @@ class TreeBaseProvider(TreeComponent, ABC):
             return ValueResponse(request.address, None, False, re)
         except TreeStructureError:
             if self._subcontractor:
+                result = None  # must be initialised before try so finally can safely test it
                 try:
                     result = await self._subcontractor.get_response(request)
-                    await self._on_subcontractor_return(result, request)
                     return result
+                except asyncio.CancelledError:
+                    raise
                 except AttributeError:
                     re = ResponseError(3002, '', repr(self), ResponseError.SEVERITY_CRITICAL)
                     logger.warning(f"Provider try call subcontractor but he doesn't has method get_response()")
-                    return ValueResponse(request.address, None, False, re)
+                    result = ValueResponse(request.address, None, False, re)
+                    return result
+                except Exception as e:
+                    re = ResponseError(3003, f'Subcontractor error: {e}', repr(self),
+                                       ResponseError.SEVERITY_CRITICAL)
+                    logger.error(f"Subcontractor {self._subcontractor} raised {type(e).__name__}: {e}")
+                    result = ValueResponse(request.address, None, False, re)
+                    return result
+                finally:
+                    if result is not None:
+                        try:
+                            await self._on_subcontractor_return(result, request)
+                        except asyncio.CancelledError:
+                            raise
+                        except Exception as cleanup_err:
+                            logger.warning(
+                                f"_on_subcontractor_return failed for {request.address}: {cleanup_err}"
+                            )
             else:
                 # This provider doesn't provide response and there is no next provider
                 re = ResponseError(3001, '', repr(self), ResponseError.SEVERITY_CRITICAL)

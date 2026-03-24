@@ -3,7 +3,7 @@ import unittest
 from obcom.data_colection.address import AddressError
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
 from obcom.data_colection.value import Value, TreeValueError
-from obcom.data_colection.value_call import ValueRequest
+from obcom.data_colection.value_call import ValueRequest, ValueResponse
 from test.data_collection.sample_test_value_provider import SampleTestValueProvider
 
 
@@ -123,6 +123,94 @@ class TreeBaseProviderTest(unittest.TestCase):
         request.index = self.start_index  # set manually index
         self.assertRaises(ValueError, asyncio.run, tbp.get_response(request))
 
+
+    def test_get_response_subcontractor_unexpected_exception(self):
+        """
+        Test when the subcontractor's get_response() raises an unexpected (non-AttributeError) exception.
+        The result should be an error response with code 3003 and _on_subcontractor_return must be called.
+        """
+
+        class _RaisingSubcontractor:
+            """Subcontractor that always raises RuntimeError from get_response()."""
+            async def get_response(self, request):
+                raise RuntimeError("unexpected subcontractor error")
+
+        class _TrackingProvider(TreeBaseProvider):
+            """Provider that tracks whether _on_subcontractor_return was invoked."""
+            on_subcontractor_return_called = False
+
+            async def _on_subcontractor_return(self, result: ValueResponse, request: ValueRequest):
+                _TrackingProvider.on_subcontractor_return_called = True
+
+        _TrackingProvider.on_subcontractor_return_called = False
+        tbp = _TrackingProvider('tracking_provider', _RaisingSubcontractor())
+
+        request = ValueRequest('.'.join([self.sample_address_prefix, 'some_source', 'some_val']),
+                               self.v1[1].ts, 20)
+        request.index = self.start_index
+        response = asyncio.run(tbp.get_response(request))
+
+        self.assertFalse(response.status)
+        self.assertIsNone(response.value)
+        self.assertEqual(response.error.code, 3003)
+        self.assertTrue(_TrackingProvider.on_subcontractor_return_called,
+                        "_on_subcontractor_return must be called even when subcontractor raises an exception")
+
+    def test_get_response_subcontractor_no_method_still_calls_on_return(self):
+        """
+        Test when the subcontractor raises AttributeError (missing get_response method).
+        The result should be an error response with code 3002 and _on_subcontractor_return must be called.
+        """
+
+        class _BadSubcontractor:
+            """Subcontractor without get_response()."""
+            pass
+
+        class _TrackingProvider(TreeBaseProvider):
+            on_subcontractor_return_called = False
+
+            async def _on_subcontractor_return(self, result: ValueResponse, request: ValueRequest):
+                _TrackingProvider.on_subcontractor_return_called = True
+
+        _TrackingProvider.on_subcontractor_return_called = False
+        tbp = _TrackingProvider('tracking_provider', _BadSubcontractor())
+
+        request = ValueRequest('.'.join([self.sample_address_prefix, 'some_source', 'some_val']),
+                               self.v1[1].ts, 20)
+        request.index = self.start_index
+        response = asyncio.run(tbp.get_response(request))
+
+        self.assertFalse(response.status)
+        self.assertIsNone(response.value)
+        self.assertEqual(response.error.code, 3002)
+        self.assertTrue(_TrackingProvider.on_subcontractor_return_called,
+                        "_on_subcontractor_return must be called even when subcontractor has no get_response()")
+
+    def test_get_response_on_subcontractor_return_exception_does_not_replace_result(self):
+        """
+        Test that an exception raised inside _on_subcontractor_return does not propagate to the
+        caller and does not replace the already-computed ValueResponse.
+        """
+
+        class _SucceedingSubcontractor:
+            async def get_response(self, request):
+                from obcom.data_colection.value import Value
+                return ValueResponse(request.address, Value(42, 1661349399.0), True)
+
+        class _RaisingOnReturnProvider(TreeBaseProvider):
+            async def _on_subcontractor_return(self, result: ValueResponse, request: ValueRequest):
+                raise RuntimeError("cleanup failure")
+
+        tbp = _RaisingOnReturnProvider('raising_on_return_provider', _SucceedingSubcontractor())
+
+        request = ValueRequest('.'.join([self.sample_address_prefix, 'some_source', 'some_val']),
+                               self.v1[1].ts, 20)
+        request.index = self.start_index
+        # Should not raise; the ValueResponse from the subcontractor should be returned.
+        response = asyncio.run(tbp.get_response(request))
+
+        self.assertTrue(response.status)
+        self.assertIsNotNone(response.value)
 
 
 if __name__ == '__main__':
