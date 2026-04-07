@@ -1,0 +1,1302 @@
+# By default this config was called "sample_config"
+
+nats:
+  host: "127.0.0.1"
+  port: 4222
+  streams:
+    alpaca_config: "tic.config.observatory"
+    plan_stream: "tic.status.{}.program.current"
+    status_stream: "tic.status.{}.program.state"
+
+# this configuration and corresponding tree_build.py is compatible with OCABOX version 2
+OCABOX_VERSION: "2"
+
+data_collection:
+  TreeCCTV:   # Ubiquity CCTV camera
+    udm_camera_id: ''
+    udm_host: sudm.oca.lan
+    udm_port: 443
+    udm_user: api
+    udm_password: ''
+
+tree:
+  wk06:
+    observatory:
+      comment: Wojtek Krzemiński 0.6m Telescope
+      flags: [ 'production', 'dev' ] # telescope is in production mode, available in dev mode also
+      lon: -70.20136    # Stefan
+      lat: -24.59858
+      elev: 2817  # m
+      epoch: 2000
+      focal_length: 4.2  # m
+      focal_ratio: 7.0
+      aperture: 0.6  # m
+#      mount_type: equatorial
+      protocol: alpaca
+      address: http://wk06-tcu.oca.lan:11111/api/v1
+      style: { color: '#14AD4E' }  # green
+      components:
+        mount:
+          kind: telescope
+          device_number: 0
+          min_alt: 14.9 # deg
+          max_alt: 90.0 # deg
+          domeflat_az_offset: 131.0  # deg relative to dome domeflat_az
+          domeflat_alt: 15.0  # deg
+          obs_min_alt: 35.0 # deg
+          park_az:  180.0  # deg
+          park_alt: 45.0  # deg
+          type: eq
+          slew_timeout: 120
+        focuser:
+          kind: focuser
+          device_number: 0
+          default_position: 21300
+          default_step: 70
+          default_seq: 8/V/5
+          default_method: lorentzian
+          focusing_methods: [ 'lorentzian', 'rms_quad', 'rms', 'ffs_fwhm' ]
+          focusing_range: {min: 20000, max: 23000}
+          move_tolerance: 5
+        dome:
+          kind: dome
+          device_number: 0
+          park_az: 180.0  # deg
+          domeflat_az: 49.0  # deg
+          slew_tolerance: 3.0 # deg
+          follow_tolerance: 3.0 # deg
+          slew_timeout: 120
+          pointing_params:
+            dome_radius: 2050.0  # mm
+            spx: -110.0  # mm
+            spy: -110.0  # mm
+            gem: 670.0  # mm
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+        camera:
+          kind: camera
+          device_number: 0
+          address: http://wk06-ccd.oca.lan:11111/api/v1
+          resolution: [ 2048, 2048 ]  # pixels
+          fov: [ 22.5, 22.5 ] # arcmin
+          pixel_scale: 0.66  # arcsec/pixel   # value to be checked
+          dither_distance: 8.0  # arcmin
+          operation_temperature: -60  # deg C
+          temperature_tolerance: [ -5, 5] # +/- deg C
+          temperature_range: {'min': -70, 'max': -50} # deg C
+          camera_kind: 'ccd'
+          camera_model: 'Andor iKon-L 936'
+          readout_modes:
+            0: {name: '5MHz',    bits: 16, val_mhz: 5.00}
+            1: {name: '3MHz',    bits: 16, val_mhz: 3.00}
+            2: {name: '1MHz',    bits: 16, val_mhz: 1.00, ron: 10.4, flags: [ 'default' ]}  # flags: default, disabled, ?
+            3: {name: '0.05MHz', bits: 16, val_mhz: 0.05, ron: 3.15}   # ron in electrons
+          gain_modes:
+            0: {name: 'x1', gain: 3.93, saturation: 27000}  # Source: Stefan Kimeswenger
+            1: {name: 'x2', gain: 1.92, saturation: 55000}
+            2: {name: 'x4', gain: 0.97, saturation: 65535, flags: [ 'default' ]}  # flags: default, disabled, ?
+          sky_flats:
+            test_exp_time: 1.0  # s
+            test_exp_interval: 1.0  # s
+            modes:
+              g-2_r-2: {test_adu_range: [ 20000, 25000 ], bias_level: 300}   # ADU
+              g-2_r-3: {test_adu_range: [ 20000, 25000 ], bias_level: 300}   # ADU
+            exposure_time_range: [ 2.0, 120.0 ]  # s
+            evening_factor: 1.11
+            era: 2  # incremented when conditions change, e.g. mirror cleaning (2025-12-13 mirror cleaning)
+            count: 7 # minimum number of flats to take in specific filter to produce master flat
+          dark:
+            exposure_time: 60.0  # s  default exp time for DARK frames
+            era: 0  # incremented when conditions change, e.g. camera fixes
+            count: 7 # minimum number of darks to take in specific filter to produce master dark
+          zero:
+            exposure_time: 0.0  # s  default exp time for ZERO frames
+            era: 0  # incremented when conditions change, e.g. camera fixes
+            count: 7 # minimum number of zeros to take in specific filter to produce master zero
+        guider:
+          kind: camera
+          device_number: 1
+          address: http://wk06-ccd.oca.lan:11111/api/v1
+        filterwheel:
+          kind: filterwheel
+          device_number: 0
+          address: http://wk06-ccd.oca.lan:11111/api/v1
+          filters:
+            - name: u_s
+              position: 0
+              style: { color: '#4C378C' }
+              description: Strömgren u
+              focus_offset: 0
+              modifier: none
+            - name: b_s
+              position: 1
+              style: { color: '#37738C' }
+              description: Strömgren b
+              focus_offset: 0
+              modifier: none
+            - name: v_s
+              position: 2
+              style: { color: '#37458C' }
+              description: Strömgren v
+              focus_offset: 0
+              modifier: none
+            - name: y_s
+              position: 3
+              description: Strömgren y
+              style: { color: '#4F8C37' }
+              focus_offset: 0
+              modifier: none
+            - name: Hb_w
+              position: 4
+              style: { color: '#FF1500' }
+              description: Hb wide
+              focus_offset: 0
+              modifier: none
+            - name: Hb_n
+              position: 5
+              style: { color: '#B30F00' }
+              description: Hb narrow
+              focus_offset: 0
+              modifier: none
+            - name: B
+              position: 6
+              style: { color: '#627CFC' }
+              description: Johnson B
+              focus_offset: 0
+              modifier: none
+            - name: V
+              position: 7
+              style: { color: '#62FCAA' }
+              description: Johnson V
+              focus_offset: 0
+              modifier: none
+            - name: Ic
+              position: 8
+              style: { color: '#FC62CE' }
+              description: Cousins I
+              focus_offset: 0
+              modifier: none
+            - name: empty
+              position: 9
+              description: Empty
+              focus_offset: 0
+              modifier: none
+            # +diffuser 
+            - name: u_s_diff
+              position: 10
+              style: { color: '#4C378C' }
+              description: Strömgren u + diffuser
+              focus_offset: 0
+              modifier: diff
+            - name: b_s_diff
+              position: 11
+              style: { color: '#37738C' }
+              description: Strömgren b + diffuser
+              focus_offset: 0
+              modifier: diff
+            - name: v_s_diff
+              position: 12
+              style: { color: '#37458C' }
+              description: Strömgren v + diffuser
+              focus_offset: 0
+              modifier: diff
+            - name: y_s_diff
+              position: 13
+              description: Strömgren y + diffuser
+              style: { color: '#4F8C37' }
+              focus_offset: 0
+              modifier: diff
+            - name: Hb_w_diff
+              position: 14
+              style: { color: '#FF1500' }
+              description: Hb wide + diffuser
+              focus_offset: 0
+              modifier: diff
+            - name: Hb_n_diff
+              position: 15
+              style: { color: '#B30F00' }
+              description: Hb narrow + diffuser
+              focus_offset: 0
+              modifier: diff
+            - name: B_diff
+              position: 16
+              style: { color: '#627CFC' }
+              description: Johnson B + diffuser
+              focus_offset: 0
+              modifier: diff
+            - name: V_diff
+              position: 17
+              style: { color: '#62FCAA' }
+              description: Johnson V + diffuser
+              focus_offset: 0
+              modifier: diff
+            - name: Ic_diff
+              position: 18
+              style: { color: '#FC62CE' }
+              description: Cousins I + diffuser
+              focus_offset: 0
+              modifier: diff
+            - name: empty_diff
+              position: 19
+              description: Empty + diffuser
+              focus_offset: 0
+              modifier: diff
+            # +blocking 1% 
+            - name: u_s_nd1
+              position: 20
+              style: { color: '#4C378C' }
+              description: Strömgren u + neutral density 1%
+              focus_offset: 0
+              modifier: nd1
+            - name: b_s_nd1
+              position: 21
+              style: { color: '#37738C' }
+              description: Strömgren b + neutral density 1%
+              focus_offset: 0
+              modifier: nd1
+            - name: v_s_nd1
+              position: 22
+              style: { color: '#37458C' }
+              description: Strömgren v + neutral density 1%
+              focus_offset: 0
+              modifier: nd1
+            - name: y_s_nd1
+              position: 23
+              description: Strömgren y + neutral density 1%
+              style: { color: '#4F8C37' }
+              focus_offset: 0
+              modifier: nd1
+            - name: Hb_w_nd1
+              position: 24
+              style: { color: '#FF1500' }
+              description: Hb wide + neutral density 1%
+              focus_offset: 0
+              modifier: nd1
+            - name: Hb_n_nd1
+              position: 25
+              style: { color: '#B30F00' }
+              description: Hb narrow + neutral density 1%
+              focus_offset: 0
+              modifier: nd1
+            - name: B_nd1
+              position: 26
+              style: { color: '#627CFC' }
+              description: Johnson B + neutral density 1%
+              focus_offset: 0
+              modifier: nd1
+            - name: V_nd1
+              position: 27
+              style: { color: '#62FCAA' }
+              description: Johnson V + neutral density 1%
+              focus_offset: 0
+              modifier: nd1
+            - name: Ic_nd1
+              position: 28
+              style: { color: '#FC62CE' }
+              description: Cousins I + neutral density 1%
+              focus_offset: 0
+              modifier: nd1
+            - name: empty_nd1
+              position: 29
+              description: Empty + neutral density 1%
+              focus_offset: 0
+              modifier: nd1
+            # +blocking 5% 
+            - name: u_s_nd5
+              position: 30
+              style: { color: '#4C378C' }
+              description: Strömgren u + neutral density 5%
+              focus_offset: 0
+              modifier: nd5
+            - name: b_s_nd5
+              position: 31
+              style: { color: '#37738C' }
+              description: Strömgren b + neutral density 5%
+              focus_offset: 0
+              modifier: nd5
+            - name: v_s_nd5
+              position: 32
+              style: { color: '#37458C' }
+              description: Strömgren v + neutral density 5%
+              focus_offset: 0
+              modifier: nd5
+            - name: y_s_nd5
+              position: 33
+              description: Strömgren y + neutral density 5%
+              style: { color: '#4F8C37' }
+              focus_offset: 0
+              modifier: nd5
+            - name: Hb_w_nd5
+              position: 34
+              style: { color: '#FF1500' }
+              description: Hb wide + neutral density 5%
+              focus_offset: 0
+              modifier: nd5
+            - name: Hb_n_nd5
+              position: 35
+              style: { color: '#B30F00' }
+              description: Hb narrow + neutral density 5%
+              focus_offset: 0
+              modifier: nd5
+            - name: B_nd5
+              position: 36
+              style: { color: '#627CFC' }
+              description: Johnson B + neutral density 5%
+              focus_offset: 0
+              modifier: nd5
+            - name: V_nd5
+              position: 37
+              style: { color: '#62FCAA' }
+              description: Johnson V + neutral density 5%
+              focus_offset: 0
+              modifier: nd5
+            - name: Ic_nd5
+              position: 38
+              style: { color: '#FC62CE' }
+              description: Cousins I + neutral density 5%
+              focus_offset: 0
+              modifier: nd5
+            - name: empty_nd5
+              position: 39
+              description: Empty + neutral density 5%
+              focus_offset: 0
+              modifier: nd5
+
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
+          device_number: 0
+
+  zb08:
+    observatory:
+      comment: Zbigniew Zibi Kołaczkowski 0.8m Telescope
+      flags: [ 'production', 'dev' ] # telescope is in production and dev mode
+      lon: -70.20134    # Stefan
+      lat: -24.59848
+      elev: 2817  # m
+      epoch: 2000
+      focal_length: 5.48  # m
+      focal_ratio: 6.85
+      aperture: 0.8  # m
+#      mount_type: alt-az
+      protocol: alpaca
+      address: http://zb08-tcu.oca.lan:11111/api/v1
+      style: { color: '#0082E8' }  # blue
+      components:
+        mount:
+          kind: telescope
+          device_number: 0
+          domeflat_az_offset: 180.0  # deg relative to dome domeflat_az
+          domeflat_alt: 15.0  # deg
+          park_az:  180.0  # deg
+          park_alt: 45.0  # deg
+          min_alt: 14.9 # deg
+          max_alt: 80.0 # deg
+          obs_min_alt: 35.0 # deg
+          type: az
+          slew_timeout: 120
+        derotator:
+          kind: rotator
+          device_number: 0
+#        derotator_f2:
+#          kind: rotator
+#          device_number: 1
+        focuser:
+          kind: focuser
+          device_number: 0
+          default_position: 15300
+          default_step: 70
+          default_seq: 8/V/5
+          default_method: lorentzian
+          focusing_methods: [ 'lorentzian', 'rms_quad', 'rms', 'ffs_fwhm' ]
+          focusing_range: {min: 14000, max: 17000}
+          move_tolerance: 5
+        dome:
+          kind: dome
+          device_number: 0
+          domeflat_az: 0.0  # deg
+          park_az: 180.0  # deg
+          slew_tolerance: 3.0 # deg
+          follow_tolerance: 3.0 # deg
+          slew_timeout: 120
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+        camera:
+          kind: camera
+          device_number: 0
+          resolution: [ 2048, 2048 ]  # pixels
+          fov: [ 17.2, 17.2 ] # arcmin
+          pixel_scale: 0.504  # arcsec/pixel
+          dither_distance: 8.0  # arcmin
+          operation_temperature: -60  # deg C
+          temperature_tolerance: [ -5, 5] # +/- deg C
+          temperature_range: {'min': -70, 'max': -50} # deg C
+          camera_kind: 'ccd'
+          camera_model: 'Andor iKon-L 936'
+          camera_sn: 'IKL936-0000'
+          readout_modes:
+            0: {name: '5MHz',    bits: 16, val_mhz: 5.00, ron: 24.36}  # ron in electrons
+            1: {name: '3MHz',    bits: 16, val_mhz: 3.00, ron: 18.06}
+            2: {name: '1MHz',    bits: 16, val_mhz: 1.00, ron: 10.4, flags: [ 'default' ]}  # flags: default, disabled, ?
+            3: {name: '0.05MHz', bits: 16, val_mhz: 0.05, ron: 3.15}
+          gain_modes:
+            0: {name: 'x1', gain: 3.93, saturation: 27000}  # Source: Stefan Kimeswenger
+            1: {name: 'x2', gain: 1.92, saturation: 55000}
+            2: {name: 'x4', gain: 0.97, saturation: 65535, flags: [ 'default' ]}  # flags: default, disabled, ?}
+          sky_flats:
+            test_exp_time: 1  # s
+            test_exp_interval: 1.0  # s
+            modes:
+              g-2_r-2: { test_adu_range: [ 20000, 25000 ], bias_level: 300}   # ADU
+              g-2_r-3: { test_adu_range: [ 20000, 25000 ], bias_level: 300}   # ADU
+            exposure_time_range: [ 2.0, 120.0 ]
+            evening_factor: 1.11
+            era: 2  # incremented when conditions change, e.g. mirror cleaning (2025-12-13 mirror cleaning)
+            count: 7 # minimum number of flats to take in specific filter to produce master flat
+          dark:
+            exposure_time: 60.0  # s  default exp time for DARK frames
+            era: 0  # incremented when conditions change, e.g. camera fixes
+            count: 7 # minimum number of darks to take in specific filter to produce master dark
+          zero:
+            exposure_time: 0.0  # s  default exp time for ZERO frames
+            era: 0  # incremented when conditions change, e.g. camera fixes
+            count: 7 # minimum number of zeros to take in specific filter to produce master zero
+        guider:
+          kind: camera
+          device_number: 1
+        filterwheel:
+          kind: filterwheel
+          device_number: 0
+          filters :
+            - name: u
+              position: 0
+              description: Sloan u
+              style: {color: '#C4B1FC'}
+              focus_offset: 0
+              modifier: none
+            - name: g
+              position: 1
+              description: Sloan g
+              style: {color: '#B1F9FC'}
+              focus_offset: 0
+              modifier: none
+            - name: r
+              position: 2
+              description: Sloan r
+              style: {color: '#FCB1B1'}
+              focus_offset: 0
+              modifier: none
+            - name: i
+              position: 3
+              description: Sloan i
+              style: {color: '#FCB1E7'}
+              focus_offset: 0
+              modifier: none
+            - name: z
+              position: 4
+              description: Sloan z
+              style: {color: '#FEFFD9'}
+              focus_offset: 0
+              modifier: none
+            - name: B
+              position: 5
+              description: Johnson B
+              style: {color: '#627CFC'}
+              focus_offset: 0
+              modifier: none
+            - name: V
+              position: 6
+              description: Johnson V
+              style: {color: '#62FCAA'}
+              focus_offset: 0
+              modifier: none
+            - name: Ic
+              position: 7
+              description: Cousins I
+              style: {color: '#FC62CE'}
+              focus_offset: 0
+              modifier: none
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
+          device_number: 0
+
+  jk15:
+    observatory:
+      comment: Janusz Kałużny 1.5m Telescope
+      flags: [ 'production', 'dev' ] # telescope is in production and dev mode
+      lon: -70.20171    # Stefan
+      lat: -24.59875
+      elev: 2817  # m
+      epoch: 2000
+      focal_length: 9.0  # m
+      focal_ratio: 6.0
+      aperture: 1.5  # m
+#      mount_type: alt-az
+      protocol: alpaca
+      address: http://jk15-tcu.oca.lan:11111/api/v1
+      style: { color: '#67F4F5' }  # cyan
+      components:
+        mount:
+          kind: telescope
+          device_number: 0
+          domeflat_az_offset: 180.0  # deg relative to dome domeflat_az
+          domeflat_alt: 15.0  # deg
+          min_alt: 14.9 # deg
+          max_alt: 80.0 # deg
+          obs_min_alt: 35.0 # deg
+          park_az:  180.0  # deg
+          park_alt: 45.0  # deg
+          type: az
+          slew_timeout: 120
+        derotator:
+#        derotator_a:
+          kind: rotator
+          tertiary_position: 0
+          device_number: 0
+#        derotator_b:
+#          kind: rotator
+#          tertiary_position: 1
+#          device_number: 1
+        focuser:
+          kind: focuser
+          device_number: 0
+#         focusing_methods:
+#            lorentzian:
+#              default_position: 25300
+#              default_step: 70
+#              default_seq: 8/V/5
+#            rms_quad:
+#              default_position: 25300
+#              default_step: 70
+#              default_seq: 8/V/5
+#            rms:
+#              default_position: 25300
+#              default_step: 70
+#              default_seq: 8/V/5
+#            ffs_fwhm:
+#              default_position: 25300
+#              default_step: 70
+#              default_seq: 8/V/5
+          default_position: 25300
+          default_step: 70
+          default_seq: 8/V/5
+          default_method: lorentzian
+          focusing_methods: [ 'lorentzian', 'rms_quad', 'rms', 'ffs_fwhm' ]
+          focusing_range: {min: 23000, max: 27000}
+          move_tolerance: 5
+        dome:
+          kind: dome
+          device_number: 0
+          domeflat_az: 0.0  # deg
+          park_az: 180.0  # deg
+          slew_tolerance: 3.0 # deg
+          follow_tolerance: 3.0 # deg
+          slew_timeout: 120
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+#        camera:
+#          kind: camera
+##          address: http://jk15-ccd.oca.lan:11111/api/v1
+#          device_number: 0
+#          code: 'c'
+#          tertiary: 't'
+#          resolution: [ 14208, 10656 ]  # pixels
+#          dither_distance: 8.0  # arcmin
+#          operation_temperature: -25  # deg C
+#          temperature_tolerance: [ -5, 5 ] # +/- deg C
+#          temperature_range: {'min': -30, 'max': 10} # deg C
+#          camera_kind: 'cmos'
+#          camera_model: 'Moravinst C5A/C5S-150M CMOS Sensor IMX411'
+#          fov: [ 23.5, 23.5 ] # arcmin
+#          pixel_scale: 0.1  # arcsec/pixel
+#          readout_modes:
+#            0: { name: '1MHz 16-bit', bits: 16, val_mhz: 1.00 }
+#          gain_modes:
+#            0:    { name: 'Gain 0' }  # Source: Stefan Kimeswenger
+#            2750: { name: 'Gain 2750' }
+#          sky_flats:
+#            test_exp_time: 1.0  # s
+#            test_exp_interval: 1.0  # s
+#            test_adu_range: [ 20000, 25000 ]  # ADU
+#            exposure_time_range: [ 2.0, 30.0 ]  # s
+#            evening_factor: 1.11
+#            bias_level: 290  # ADU
+
+        camera:
+          kind: camera
+          device_number: 0
+          tertiary_position: 0
+          resolution: [ 4096, 4112 ]  # pixels
+          fov: [ 23.5, 23.5 ] # arcmin
+          pixel_scale: 0.344  # arcsec/pixel   # value to be checked
+          dither_distance: 8.0  # arcmin
+          operation_temperature: -60  # deg C
+          temperature_tolerance: [ -5, 5] # +/- deg C
+          temperature_range: {'min': -70, 'max': -50}
+          camera_kind: 'ccd'
+          camera_model: 'Andor iKon-XL 231'
+          vertical_shift_speed: 134.49   # us/pixel   # header: CCD-VSSP
+#          vertical_shift_speed: 156.89  # us/pixel
+          baseline_clamp: False          # header: CCD-BLCL
+          sensor_port: "bottom-left" # which amplifier to use: all, bottom-left, bottom-right, top-left, top-right # header: CCD-PORT
+          sensor_compensation: False    # header: CCD-SCMP
+          readout_modes:
+            0: {name: '4MHz 16-bit',    bits: 16, val_mhz: 4.00}
+            1: {name: '2MHz 16-bit',    bits: 16, val_mhz: 2.00}
+            2: {name: '1MHz 16-bit',    bits: 16, val_mhz: 1.00}
+            3: {name: '1MHz 18-bit',    bits: 18, val_mhz: 1.00, ron: 10.80, flags: [ 'default' ]}  # RON source: Wojciech Pych 03-09-2025
+            4: {name: '0,1MHz 16-bit',  bits: 16, val_mhz: 0.1}
+            5: {name: '0,1MHz 18-bit',  bits: 18, val_mhz: 0.1}  # flags: default, disabled, ?
+          gain_modes:
+            0: {name: 'Gain 1'}
+            1: {name: 'Gain 2', gain: 1.00, flags: [ 'default' ]}  # gain source: Wojciech Pych 03-09-2025
+            2: {name: 'Gain 3'}
+          sky_flats:
+            test_exp_time: 1.0  # s
+            test_exp_interval: 1.0  # s
+            modes:
+              g-1_r-3: { test_adu_range: [ 40000, 60000 ], bias_level: 3817}   # ADU
+              g-1_r-5: { test_adu_range: [ 40000, 60000 ], bias_level: 2678}   # ADU
+            exposure_time_range: [ 10.0, 120.0 ]  # s
+            evening_factor: 1.11
+            era: 2  # incremented when conditions change, e.g. mirror cleaning
+            count: 7 # minimum number of flats to take in specific filter to produce master flat
+          dark:
+            exposure_time: 60.0  # s  default exp time for DARK frames
+            era: 1  # incremented when conditions change, e.g. camera fixes
+            count: 7 # minimum number of darks to take in specific filter to produce master dark
+          zero:
+            exposure_time: 0.1  # s  default exp time for ZERO frames
+            era: 1  # incremented when conditions change, e.g. camera fixes
+            count: 7 # minimum number of zeros to take in specific filter to produce master zero
+            obs_limits: # those values are overridden from global
+              weather_restrictions:
+                wind:
+                  # Values changed on 2025-12
+                  observation_stop: 16.0  # m/s
+                  pointing: 14.0  # m/s restricts observations towards the wind
+
+        #        tertiary:
+#          kind: autoslew-tertiary  # ASA AutoSlew specific tertiary mirror controller
+#          device_number: 0
+#          positions:
+#            0: {name: 'andor', autoslew-name: 'ADR10'}  # autoslew-name - displayed on ASA AutoSlew
+#            1: {name: 'beso', autoslew-name: 'ADR6'}
+        guider_a:
+          kind: camera
+          tertiary_position: 0  # index from jk15.tertiary.positions
+          device_number: 1
+        filterwheel:
+          kind: filterwheel
+          tertiary_position: 0
+          device_number: 0
+          filters:
+            - name: empty
+              position: 0
+              focus_offset: 0
+              modifier: none
+            - name: u_s
+              position: 1
+              style: {color: '#4C378C'}
+              description: Strömgren u
+              focus_offset: 0
+              modifier: none
+            - name: b_s
+              position: 2
+              style: {color: '#37738C'}
+              description: Strömgren b
+              focus_offset: 0
+              modifier: none
+            - name: v_s
+              position: 3
+              style: {color: '#37458C'}
+              description: Strömgren v
+              focus_offset: 0
+              modifier: none
+            - name: y_s
+              position: 4
+              description: Strömgren y
+              style: {color: '#4F8C37'}
+              focus_offset: 0
+              modifier: none
+            - name: Hb_w
+              position: 5
+              style: {color: '#00FCFC'}
+              description: Hβ wide
+              focus_offset: 0
+              modifier: none
+            - name: Hb_n
+              position: 6
+              style: {color: '#00B3B3'}
+              description: Hβ narrow
+              focus_offset: 0
+              modifier: none
+            - name: Ha_w
+              position: 7
+              style: {color: '#FF1500'}
+              description: Hɑ wide
+              focus_offset: 0
+              modifier: none
+            - name: Ha_n
+              position: 8
+              style: {color: '#B30F00'}
+              description: Hɑ narrow
+              focus_offset: 0
+              modifier: none
+            - name: u
+              position: 9
+              style: {color: '#C4B1FC'}
+              description: Sloan u
+              focus_offset: 0
+              modifier: none
+            - name: g
+              position: 10
+              style: {color: '#B1F9FC'}
+              description: Sloan g
+              focus_offset: 0
+              modifier: none
+            - name: r
+              position: 11
+              style: {color: '#FCB1B1'}
+              description: Sloan r
+              focus_offset: 0
+              modifier: none
+            - name: i
+              position: 12
+              style: {color: '#FCB1E7'}
+              description: Sloan i
+              focus_offset: 0
+              modifier: none
+            - name: z
+              position: 13
+              style: {color: '#FEFFD9'}
+              description: Sloan z
+              focus_offset: 0
+              modifier: none
+            - name: B
+              position: 14
+              style: {color: '#627CFC'}
+              description: Johnson B
+              focus_offset: 0
+              modifier: none
+            - name: V
+              position: 15
+              style: {color: '#62FCAA'}
+              description: Johnson V
+              focus_offset: 0
+              modifier: none
+            - name: Ic
+              position: 16
+              style: {color: '#FC62CE'}
+              description: Cousins I
+              focus_offset: 0
+              modifier: none
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
+          device_number: 0
+
+  wg25:
+    observatory:
+      comment: Wolfgang Gieren 2.5m Telescope
+      flags: [ 'disabled' ] # telescope is disabled
+      lon: -70.20110    # Stefan
+      lat: -24.59829
+      elev: 2817  # m
+      epoch: 2000
+      protocol: alpaca
+      address: http://wg25-tcu.oca.lan:11111/api/v1
+      style: { color: '#FF8C00' }  # orange
+      components:
+        mount:
+          kind: telescope
+          device_number: 0
+          type: az
+          slew_timeout: 120
+        derotator:
+          kind: rotator
+          device_number: 0
+        derotator_f2:
+          kind: rotator
+          device_number: 1
+        focuser:
+          kind: focuser
+          device_number: 0
+        dome:
+          kind: dome
+          device_number: 0
+          slew_timeout: 120
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+        camera:
+          kind: camera
+          device_number: 0
+        filterwheel:
+          kind: filterwheel
+          device_number: 0
+          filters: {}  # optional
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
+          device_number: 0
+
+  sim:
+    observatory:
+      comment: ASCOM Simulator at OCA
+      flags: [ 'dev' ] # telescope is only in dev mode
+      lon: -70.19638    # OCA
+      lat: -24.59806
+      elev: 2817  # m      protocol: alpaca
+      epoch: 2000
+      protocol: alpaca
+      address: http://docker.oca.lan:8089/api/v1
+      style: { color: '#808080' }  # magenta
+      components:
+        mount:
+          kind: telescope
+          device_number: 0
+          type: az
+        derotator:
+          kind: rotator
+          device_number: 0
+        focuser:
+          kind: focuser
+          device_number: 0
+        dome:
+          kind: dome
+          device_number: 0
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+        camera:
+          kind: camera
+          device_number: 0
+        filterwheel:
+          kind: filterwheel
+          device_number: 0
+          filters: {}  # optional
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
+          device_number: 0
+
+  dev:
+    observatory:
+      comment: ASCOM Simulator at localhost:80
+      flags: [ 'dev' ] # telescope is only in dev mode
+      lon: -70.19638    # OCA
+      lat: -24.59806
+      elev: 2817  # m      protocol: alpaca
+      epoch: 2000
+      protocol: alpaca
+      address: http://localhost:80/api/v1
+      style: { color: '#FF00FF' }  # magenta
+      components:
+        mount:
+          kind: telescope
+          device_number: 0
+          type: az
+          min_alt: 14.9 # deg
+          max_alt: 90.0 # deg
+          obs_min_alt: 35.0 # deg
+          slew_timeout: 120
+          domeflat_az_offset: 180.0  # deg relative to dome domeflat_az
+          domeflat_alt: 15.0  # deg
+        derotator:
+          kind: rotator
+          device_number: 0
+        focuser:
+          kind: focuser
+          device_number: 0
+          move_tolerance: 5
+        dome:
+          kind: dome
+          device_number: 0
+          domeflat_az: 0.0  # deg
+          slew_tolerance: 3.0 # deg
+          follow_tolerance: 3.0 # deg
+          slew_timeout: 120
+        covercalibrator:
+          kind: covercalibrator
+          device_number: 0
+        camera:
+          kind: camera
+          device_number: 0
+          sky_flats:
+            test_exp_time: 1  # s
+            test_exp_interval: 1.0  # s
+            modes:
+              g-0_r-0: { test_adu_range: [ 20000, 25000 ], bias_level: 300}   # ADU
+            exposure_time_range: [ 5.0, 120.0 ]  # s
+            evening_factor: 1.11
+            era: 1  # incremented when conditions change, e.g. mirror cleaning
+            count: 7 # minimum number of flats to take in specific filter to produce master flat
+        guider:
+          kind: camera
+          device_number: 0
+        filterwheel:
+          kind: filterwheel
+          device_number: 0
+          filters:
+            - name: u
+              position: 0
+              description: Sloan u
+              style: { color: '#C4B1FC' }
+              focus_offset: 15
+              modifier: none
+            - name: g
+              position: 1
+              description: Sloan g
+              style: { color: '#B1F9FC' }
+              focus_offset: 0
+              modifier: none
+            - name: r
+              position: 2
+              description: Sloan r
+              style: { color: '#FCB1B1' }
+              focus_offset: -20
+              modifier: none
+            - name: i
+              position: 3
+              description: Sloan i
+              style: { color: '#FCB1E7' }
+              focus_offset: 10
+              modifier: none
+            - name: z
+              position: 4
+              description: Sloan z
+              style: { color: '#FEFFD9' }
+              focus_offset: 50
+              modifier: none
+            - name: B
+              position: 5
+              description: Johnson B
+              style: { color: '#627CFC' }
+              focus_offset: -30
+              modifier: none
+            - name: V
+              position: 6
+              description: Johnson V
+              style: { color: '#62FCAA' }
+              focus_offset: 20
+              modifier: none
+            - name: Ic
+              position: 7
+              description: Cousins I
+              style: { color: '#FC62CE' }
+              focus_offset: 10
+              modifier: none
+        switch:
+          kind: switch
+          device_number: 0
+        safetymonitor:
+          kind: safetymonitor
+          device_number: 0
+
+  iris:
+    observatory:
+      comment: IRIS Telescope
+      flags: [ 'production', 'dev' ]
+      lon: -70.20136    # Podaj właściwe współrzędne dla teleskopu
+      lat: -24.59858
+      elev: 2817
+      epoch: 2000
+      style: { color: '#FF2F13' }
+      components:
+        mount:
+          kind: telescope
+          protocol: pilar
+          address: 127.0.0.1:12345  # Uzupełnij adres
+          device_number: 0
+          type: az
+          slew_timeout: 120
+        covercalibrator:
+          kind: covercalibrator
+          protocol: pilar
+          address: 127.0.0.1:12345  # Uzupełnij adres
+          device_number: 0
+
+        dome:
+          kind: dome
+          protocol: alpaca
+          address: http://localhost:80/api/v1  # Uzupełnij adres
+          device_number: 0
+          slew_timeout: 120
+        camera:
+          kind: camera
+          protocol: iris_ccd
+          address: 127.0.0.1:10000  # Uzupełnij adres
+          device_number: 0
+          
+        filterwheel:
+          kind: filterwheel
+          protocol: iris_ccd
+          address: 127.0.0.1:10000   # Uzupełnij adres
+          device_number: 0
+
+  cctv-wk06: # Ubiquity CCTV camera
+    udm_camera_id: CD06  # camera name in Ubiquity protect
+#    udm_host: ''
+#    udm_port: 443
+#    udm_user: 'api'
+#    udm_password: ''
+  cctv-zb08: # Ubiquity CCTV camera
+    udm_camera_id: CD08
+  cctv-jk15: # Ubiquity CCTV camera
+    udm_camera_id: CD15
+
+
+
+LOG_LEVEL: WARNING
+
+OCABOX_BUILD_FILE_NAME: "tree_build_oca.py"
+
+#logging:
+#  handlers:
+#    console:
+#      module: logging
+#      class: StreamHandler
+#      level: INFO
+#      format: '%(asctime)s %(levelname)-8s %(name)-15s %(message)s'
+#    file:
+#      module: logging
+#      class: FileHandler
+#      level: DEBUG
+#      format: '%(asctime)s %(levelname)-8s %(name)-15s %(message)s'
+#      filename: /tmp/ocabox.log
+
+site:
+  global:
+    geo_location:
+      lon: -70.19638
+      lat: -24.59806
+      elev: 2817
+    obs_limits:  # those values can be overridden by instrument (camera) specific values
+      weather_restrictions:
+        wind:
+          observation_stop: 14.0  # m/s
+          pointing: 11.0  # m/s    restricts observations towards the wind
+          restricted_pointing_wind_angle: 100.0  # deg  plus minus deg difference of dome azimuth and wind direction
+        temperature:
+          min: -1.0  # deg C
+          max: 30.0  # deg C
+        humidity:
+          max: 70.0  # %
+      ephem:
+        sun_altitude: -18.0  # deg
+        full_moon_distance: 40.0  # deg
+
+    paths:
+      base_fits_dir: /data/fits/
+      base_cycle_time_calc_dir: /data/misc/cycle_time_calc
+      objects_list_dir: /data/misc/synced/objects_list
+    nats:
+      host: 127.0.0.1
+      port: 4222
+      subjects:
+        weather: 'telemetry.weather.davis'
+        rpc:
+          download: 'tic.rpc.{telescope}.download'
+          guiding: 'tic.rpc.{telescope}.guiding'
+          download_alive: 'tic.rpc.{telescope}.download.alive'
+          guiding_alive: 'tic.rpc.{telescope}.guiding.alive'
+          pipeline_alive: 'tic.rpc.{telescope}.pipeline.alive'
+        journal:
+          download: 'tic.journal.{telescope}.download'
+          guiding: 'tic.journal.{telescope}.guiding'
+          pipeline: 'tic.journal.{telescope}.pipeline'
+          planner: 'tic.journal.{telescope}.planner'
+        status:
+          download: 'tic.status.{telescope}.download'
+          pipeline: 'tic.status.{telescope}.pipeline'
+#          planner_static: 'tic.status.{telescope}.planner.static'
+#          planner_status: 'tic.status.{telescope}.planner.status'
+#          planner_time: 'tic.status.{telescope}.planner.time'
+          fits_pipeline_raw: 'tic.status.{telescope}.fits.pipeline.raw'
+          fits_pipeline_zdf: 'tic.status.{telescope}.fits.pipeline.zdf'
+          fits_pipeline_fast_stat: 'tic.status.{telescope}.fits.pipeline.faststat'
+          fits_pipeline_photometry: 'tic.status.{telescope}.fits.pipeline.photometry'
+          objects_pipeline_missing: 'tic.status.objects.pipeline.missing'
+          planner_command_log: 'tic.status.{telescope}.planner.command.log'
+          zero_monitor: 'tic.status.{telescope}.zero_monitor'
+        planner:
+          data_static: 'tic.planner.{telescope}.data.static'
+          data_status: 'tic.planner.{telescope}.data.status'
+          data_time: 'tic.planner.{telescope}.data.time'
+          status_error: 'tic.planner.{telescope}.status.error'
+          status_progress_exposure: 'tic.planner.{telescope}.status.progress.exposure'
+          status_progress_readout: 'tic.planner.{telescope}.status.progress.readout'
+        # to be continued....
+
+  client:
+    TOI_Client:
+      ticconnection:
+        port: 5559
+        url: 127.0.0.1
+        protocol: tcp
+        timeout: 30
+      time_of_data_tolerance: 0.5  # extra, not used by ocabox
+      request_timeout: 5.1  # extra, not used by ocabox
+      delay: 0.1  # extra, not used by ocabox
+      max_missed_msg: 3  # extra, not used by ocabox
+      app:
+        base_fits_dir: /data/fits/
+        base_log_toi_dir: ~/.oca/log_toi
+        base_cycle_time_calc_dir: /data/misc/cycle_time_calc
+        base_log_night_dir: ~/.oca/log_night
+        base_program_dir: ~/Desktop
+        nats_subject: #Rpc subject: [rpc_root].[tel_id].[service_name], Journal subject: [journal_root].[tel_id].[service_name]
+          rpc_root: 'tic.rpc'
+          journal_root: 'tic.journal'
+          status_root: 'tic.status'
+          discovery_root: 'tic.discovery'
+          telemetry_davis: 'telemetry.weather.davis'
+          service_name:
+            download: 'download'
+            guiding: 'guiding'
+            pipeline: 'pipeline'
+          tic_comp: #Journal exampl: [journal_root].[tel_id].[tic_component].[planner_sub]
+            planner: 'planner'
+            guider_handler: 'guider_handler'
+          planner_status:
+            plan_static: 'static'
+            plan_status: 'status'
+            plan_time: 'time'
+            camera_exposure: 'camera_exposure'
+          rpc_service_alive: 'alive' #Rpc service alive subject: [rpc_root].[tel_id].[service_name].[rpc_service_alive]
+          # e.g.: tic.rpc.zb08.pipeline.alive
+          # e.g.: tic.pipeline.zb08.alive  {timestamp: 2021-03-04T12:00:00.000000Z, next_alvie: 2021-03-04T12:00:00.000000Z, status: 1}
+          service_health: 'health' #Rpc service health subject: [rpc_root].[tel_id].[service_name].[service_health]
+            # e.g. tic.rpc.zb08.pipeline.health
+            # e.g. tic.pipeline.zb08.rpc.health
+            # STREM RPC TIC:  tic.*.(*).rpc.>  oraz
+            # e.g. tic.rpc.tits.health
+            # tic.discovery.zb08.pipeline
+            # tic.discovery.zb08.tcu.tmeperture
+          # discovery.>
+          # oca.discovery
+        nats_host: 127.0.0.1
+        nats_port: 4222
+
+    CliClient:
+      ticconnection:
+        port: 5559
+        url: 127.0.0.1
+        protocol: tcp
+        timeout: 31.7
+      time_of_data_tolerance: 0.5  # extra, not used by ocabox
+      request_timeout: 5.1  # extra, not used by ocabox
+      delay: 0.1  # extra, not used by ocabox
+      max_missed_msg: 3  # extra, not used by ocabox
+      app:
+        base_fits_dir: /data/fits/
+        base_log_textui_dir: ~/.oca/log_textui
+        base_cycle_time_calc_dir: /data/misc/cycle_time_calc
+        base_log_night_dir: ~/.oca/log_night
+        base_program_dir: ~/Desktop
+        nats_subject: #Rpc subject: [rpc_root].[tel_id].[service_name], Journal subject: [journal_root].[tel_id].[service_name]
+          rpc_root: 'tic.rpc'
+          journal_root: 'tic.journal'
+          status_root: 'tic.status'
+          discovery_root: 'tic.discovery'
+          telemetry_davis: 'telemetry.weather.davis'
+          service_name:
+            download: 'download'
+            guiding: 'guiding'
+            pipeline: 'pipeline'
+          tic_comp: #Journal exampl: [journal_root].[tel_id].[tic_component].[planner_sub]
+            planner: 'planner'
+            guider_handler: 'guider_handler'
+          planner_status:
+            plan_static: 'static'
+            plan_status: 'status'
+            plan_time: 'time'
+            camera_exposure: 'camera_exposure'
+          rpc_service_alive: 'alive' #Rpc service alive subject: [rpc_root].[tel_id].[service_name].[rpc_service_alive]
+          # e.g.: tic.rpc.zb08.pipeline.alive
+          # e.g.: tic.pipeline.zb08.alive  {timestamp: 2021-03-04T12:00:00.000000Z, next_alvie: 2021-03-04T12:00:00.000000Z, status: 1}
+          service_health: 'health' #Rpc service health subject: [rpc_root].[tel_id].[service_name].[service_health]
+            # e.g. tic.rpc.zb08.pipeline.health
+            # e.g. tic.pipeline.zb08.rpc.health
+            # STREM RPC TIC:  tic.*.(*).rpc.>  oraz
+            # e.g. tic.rpc.tits.health
+          # tic.discovery.zb08.pipeline
+          # tic.discovery.zb08.tcu.tmeperture
+          # discovery.>
+          # oca.discovery
+        nats_host: 127.0.0.1
+        nats_port: 4222
+
+    DefaultClient:
+      ticconnection:
+        port: 5559
+        url: 127.0.0.1
+        protocol: tcp
+        timeout: 30
+      time_of_data_tolerance: 0.5  # extra, not used by ocabox
+      request_timeout: 5.1  # extra, not used by ocabox
+      delay: 0.1  # extra, not used by ocabox
+      max_missed_msg: 3  # extra, not used by ocabox
+      app:
+        base_fits_dir: /data/fits/
+        base_cycle_time_calc_dir: /data/misc/cycle_time_calc
+        base_log_night_dir: ~/.oca/log_night
+        base_program_dir: ~/Desktop
+        nats_subject: #Rpc subject: [rpc_root].[tel_id].[service_name], Journal subject: [journal_root].[tel_id].[service_name]
+          rpc_root: 'tic.rpc'
+          journal_root: 'tic.journal'
+          status_root: 'tic.status'
+          discovery_root: 'tic.discovery'
+          telemetry_davis: 'telemetry.weather.davis'
+          service_name:
+            download: 'download'
+            guiding: 'guiding'
+            pipeline: 'pipeline'
+          tic_comp: #Journal exampl: [journal_root].[tel_id].[tic_comp]
+            planner: 'planner'
+            guider_handler: 'guider_handler'
+          planner_status: #Journal exampl: [status_root].[tel_id].[tic_comp].[plan_static]
+            plan_static: 'static'
+            plan_status: 'status'
+            plan_time: 'time'
+            camera_exposure: 'camera_exposure'
+          rpc_service_alive: 'alive' #Rpc service alive subject: [rpc_root].[tel_id].[service_name].[rpc_service_alive]
+          # e.g.: tic.rpc.zb08.pipeline.alive
+          # e.g.: tic.pipeline.zb08.alive  {timestamp: 2021-03-04T12:00:00.000000Z, next_alvie: 2021-03-04T12:00:00.000000Z, status: 1}
+          service_health: 'health' #Rpc service health subject: [rpc_root].[tel_id].[service_name].[service_health]
+            # e.g. tic.rpc.zb08.pipeline.health
+            # e.g. tic.pipeline.zb08.rpc.health
+            # STREM RPC TIC:  tic.*.(*).rpc.>  oraz
+            # e.g. tic.rpc.tits.health
+          # tic.discovery.zb08.pipeline
+          # tic.discovery.zb08.tcu.tmeperture
+          # discovery.>
+          # oca.discovery
+        nats_host: 127.0.0.1
+        nats_port: 4222
+
+
+router:
+  Router-OCA:
+    port: 5559
+    timeout: 30
+    echo-task-enabled: True
+    echo-task-interval: 30.0
+    # deprecated
+    ping-tasks-enabled: True
+    ping-tasks-interval: 30.0
