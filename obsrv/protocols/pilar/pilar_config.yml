@@ -27,7 +27,8 @@ components:
           value: "{Position}"
 
   telescope: # 'telescope' jest używane jako standardowa nazwa dla komponentu 'mount'
-    reading:
+#    reading:
+    mappings:
       rightascension: "OBJECT.EQUATORIAL.RA"
       declination: "OBJECT.EQUATORIAL.DEC"
       azimuth: "OBJECT.INSTRUMENTAL.AZ"

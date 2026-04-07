@@ -5,11 +5,10 @@ from typing import Iterable, Callable, Tuple, Dict
 import confuse
 
 from obsrv.protocols.alpaca.alpaca_connector import Connector
-from obsrv.telescope_devices.standard_components import StandardTelescopeComponents
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'iris_ccd_config.yaml')
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'iris_ccd_config.yml')
 
 class IrisCcdProtocol(asyncio.DatagramProtocol):
     def __init__(self, response_future: asyncio.Future):
@@ -36,10 +35,8 @@ class IrisCcdConnector(Connector):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._load_config()
-        self._lock = asyncio.Lock()
-        self._transport = None
-        self._protocol = None
-        self._connected = False
+        self._endpoints = {} # Map: address -> (transport, protocol)
+        self._locks = {}     # Map: address -> asyncio.Lock
         logger.info('IrisCcdConnector created')
 
     def _load_config(self):
@@ -56,63 +53,79 @@ class IrisCcdConnector(Connector):
             logger.error(f"CRITICAL: Could not read IRIS CCD config file. Error: {e}")
             raise RuntimeError("IRIS CCD connector configuration is missing or corrupted.") from e
 
-    async def connect(self, host: str, port: int):
-        if self._connected:
-            return True
-        logger.info(f"Setting up UDP endpoint for IRIS CCD at {host}:{port}...")
-        try:
-            loop = asyncio.get_running_loop()
-            self._transport, self._protocol = await loop.create_datagram_endpoint(
-                lambda: IrisCcdProtocol(asyncio.Future()),
-                remote_addr=(host, port)
-            )
-            self._connected = True
-            logger.info("UDP endpoint for IRIS CCD is ready.")
-            return True
-        except (OSError, asyncio.TimeoutError) as e:
-            logger.error(f"Failed to create UDP endpoint for IRIS CCD: {e}")
-            return False
-
-    async def disconnect(self):
-        if not self._connected:
-            return
-        self._connected = False
-        if self._transport:
-            self._transport.close()
-            self._transport = None
-            self._protocol = None
-        logger.info("IRIS CCD UDP endpoint closed.")
-
-    async def _execute_command(self, command_str: str) -> str:
-        async with self._lock:
-            if not self._connected:
-                raise ConnectionError("IRIS CCD connector is not connected.")
+    async def _get_endpoint(self, address: str):
+        if address not in self._locks:
+            self._locks[address] = asyncio.Lock()
+        
+        async with self._locks[address]:
+            if address in self._endpoints:
+                return self._endpoints[address]
             
             try:
+                host, port_str = address.split(':')
+                port = int(port_str)
+                loop = asyncio.get_running_loop()
+                # Create a protocol with a dummy future initially
+                protocol = IrisCcdProtocol(asyncio.Future())
+                transport, protocol = await loop.create_datagram_endpoint(
+                    lambda: protocol,
+                    remote_addr=(host, port)
+                )
+                self._endpoints[address] = (transport, protocol)
+                logger.info(f"UDP endpoint created for {address}")
+                return transport, protocol
+            except Exception as e:
+                logger.error(f"Failed to connect UDP to {address}: {e}")
+                raise
+
+    async def _execute_command(self, address: str, command_str: str) -> str:
+        # Get endpoint first to ensure locks are created
+        transport, protocol = await self._get_endpoint(address)
+        
+        # Lock per address to ensure sequential request-response on the same socket
+        async with self._locks[address]:
+            if not transport or transport.is_closing():
+                 # Reconnect logic if needed, simplistically removing from cache
+                 if address in self._endpoints: del self._endpoints[address]
+                 transport, protocol = await self._get_endpoint(address)
+
+            try:
+                response_future = asyncio.get_running_loop().create_future()
+                # Update future in the protocol instance
+                protocol.response_future = response_future
+                
                 command_bytes = command_str.encode('utf-8')
                 packet_to_send = command_bytes.ljust(self._packet_size, b'\0')
-                response_future = asyncio.get_running_loop().create_future()
-                self._protocol.response_future = response_future
-                logger.debug(f"IRIS CCD OUT >>> {command_str}")
-                self._transport.sendto(packet_to_send)
+                
+                logger.debug(f"IRIS CCD OUT ({address}) >>> {command_str}")
+                transport.sendto(packet_to_send)
+                
                 data = await asyncio.wait_for(response_future, timeout=self._timeout)
                 response = data.split(b'\0', 1)[0].decode('utf-8')
-                logger.debug(f"IRIS CCD IN <<< {response}")
+                logger.debug(f"IRIS CCD IN ({address}) <<< {response}")
 
-                if response.startswith("**** OKAY"):
-                    return response[10:].strip()
+                if "OKAY" in response:
+                    # Znajdujemy pozycję słowa OKAY i zwracamy wszystko, co po nim występuje
+                    index = response.find("OKAY")
+                    return response[index + 4:].strip()
                 else:
-                    raise RuntimeError(f"IRIS CCD returned an error or unexpected response: {response}")
+                    raise RuntimeError(f"IRIS CCD error: {response}")
 
             except asyncio.TimeoutError:
-                logger.error(f"IRIS CCD command '{command_str}' timed out after {self._timeout}s.")
+                logger.error(f"IRIS CCD command '{command_str}' timed out.")
+                # Force reconnect on timeout to be safe
+                if address in self._endpoints: del self._endpoints[address]
                 raise TimeoutError("IRIS CCD did not respond in time.")
             except Exception as e:
-                logger.error(f"An error occurred during IRIS CCD command execution: {e}")
-                await self.disconnect()
+                logger.error(f"Error during IRIS CCD command: {e}")
                 raise
 
     async def get(self, component: 'Component', variable: str, kind=None, **data):
+        address = component.get_option_recursive('address')
+        if not address:
+             logger.error(f"No address for component {component.sys_id}")
+             return None
+             
         try:
             command_def = self._command_map[component.kind][variable]
             command_base = command_def['command']
@@ -121,27 +134,61 @@ class IrisCcdConnector(Connector):
                 command = f"{command_base} {get_arg}"
             else:
                 command = command_base
-            return await self._execute_command(command)
+            
+            # 1. Pobieramy surowy tekst z kamery
+            raw_response = await self._execute_command(address, command)
+            
+            # 2. TŁUMACZENIE STANU KAMERY NA STANDARD ALPACA
+            if component.kind == 'camera' and variable == 'camerastate':
+                resp_upper = raw_response.upper()
+                if "EXPOS" in resp_upper:
+                    return 2  # CameraExposing
+                elif "WAIT" in resp_upper:
+                    return 1  # CameraWaiting
+                elif "READ" in resp_upper:
+                    return 3  # CameraReading
+                elif "DOWNLOAD" in resp_upper:
+                    return 4  # CameraDownload
+                elif "ERROR" in resp_upper or "FAIL" in resp_upper:
+                    return 5  # CameraError
+                else:
+                    # Dla "OK" i wszelkich innych statusów spoczynkowych
+                    return 0  # CameraIdle
+            
+            # 3. Zwracamy odpowiedź (jeśli to nie jest camerastate, zwróci tekst)
+            return raw_response
+            
         except (KeyError, TimeoutError, ConnectionError, RuntimeError) as e:
             logger.error(f"IRIS CCD GET failed for {component.kind}.{variable}: {e}")
             return None
 
     async def put(self, component: 'Component', variable: str, kind=None, **data):
+        address = component.get_option_recursive('address')
+        if not address:
+             return {"status": "failed", "error": "No address"}
+
         try:
             command_def = self._command_map[component.kind][variable]
             command_base = command_def['command']
+            if not data:
+                return {"status": "failed", "error": "Missing input value."}
             value = list(data.values())[0]
             command = f"{command_base} {value}"
-            response = await self._execute_command(command)
+            response = await self._execute_command(address, command)
             return {"status": "ok", "response": response}
         except (KeyError, TimeoutError, ConnectionError, RuntimeError) as e:
             logger.error(f"IRIS CCD PUT failed for {component.kind}.{variable}: {e}")
             return {"status": "failed", "error": str(e)}
 
     async def call(self, component: 'Component', function: str, **data):
+        address = component.get_option_recursive('address')
+        if not address:
+             return {"status": "failed", "error": "No address"}
+
         action_steps = self._actions_map.get(function)
         if not action_steps:
             return {"status": "unknown_function"}
+        
         logger.info(f"Executing IRIS CCD action: {function} with data {data}")
         try:
             last_response = None
@@ -159,12 +206,11 @@ class IrisCcdConnector(Connector):
                 else:
                     command = f"{command_base} {value_template}"
                 
-                last_response = await self._execute_command(command)
+                last_response = await self._execute_command(address, command)
             return {"status": f"action_{function}_completed", "response": last_response}
         except Exception as e:
             logger.error(f"IRIS CCD CALL failed for action {function}: {e}")
             return {"status": "failed", "error": str(e)}
 
     async def subscribe(self, variables: Iterable[Tuple[str, str]], callback: Callable):
-        logger.warning("IRIS CCD protocol does not support subscriptions.")
         pass
