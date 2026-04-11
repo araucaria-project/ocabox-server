@@ -59,6 +59,11 @@ components:
           value: "{Altitude}"
         - variable: "tracking"
           value: 2
+        - verify:
+            azimuth: "{Azimuth}"
+            altitude: "{Altitude}"
+            tolerance: 0.05
+            timeout: 120
       slewtoaltazasync:
         - variable: "azimuth"
           value: "{Azimuth}"
@@ -66,6 +71,11 @@ components:
           value: "{Altitude}"
         - variable: "tracking"
           value: 2
+        - verify:
+            azimuth: "{Azimuth}"
+            altitude: "{Altitude}"
+            tolerance: 0.05
+            timeout: 120
       abortslew:
         - variable: "slewing"
           value: "ABORT"
