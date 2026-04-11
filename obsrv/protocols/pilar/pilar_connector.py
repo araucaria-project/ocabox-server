@@ -52,7 +52,9 @@ class PilarConnection:
                 # Rozpoznajemy status zakończenia komendy
                 if "COMMAND COMPLETE" in response_line:
                     return value_to_return if value_to_return is not None else "OK"
-                if "COMMAND FAILED" in response_line:
+                
+                # Rozszerzone wyłapywanie asynchronicznych błędów i ostrzeżeń z serwera
+                if any(error_flag in response_line for error_flag in ["COMMAND FAILED", "DATA ERROR", "FAILED", "EVENT WARN"]):
                     raise RuntimeError(f"Pilar command failed: {command_str}. Server said: {response_line}")
 
 
