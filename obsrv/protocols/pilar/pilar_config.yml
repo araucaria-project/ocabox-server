@@ -57,11 +57,15 @@ components:
           value: "{Azimuth}"
         - variable: "altitude"
           value: "{Altitude}"
+        - variable: "tracking"
+          value: 2
       slewtoaltazasync:
         - variable: "azimuth"
           value: "{Azimuth}"
         - variable: "altitude"
           value: "{Altitude}"
+        - variable: "tracking"
+          value: 2
       abortslew:
         - variable: "slewing"
           value: "ABORT"
