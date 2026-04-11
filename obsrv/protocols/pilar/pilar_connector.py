@@ -276,89 +276,80 @@ class PilarConnector(Connector):
 
         if not action_steps:
             logger.warning(f"Unknown Pilar action called: {function} for component {component.kind}")
-            return {"status": "unknown_function"}
+            # Rzucamy wyjątek (jak w Alpace), klient dostanie poprawny kod błędu
+            raise NotImplementedError(f"Unknown action: {function}")
 
         logger.info(f"Executing Pilar action: {function} with data {data}")
-        try:
-            for step in action_steps:
-                # --- Obsługa pętli sprawdzającej pozycję (polling) dla kroku 'verify' ---
-                if 'verify' in step:
-                    verify_data = step['verify']
-                    tolerance = float(verify_data.get('tolerance', 0.05))
-                    timeout_s = int(verify_data.get('timeout', 120))
-                    
-                    logger.info(f"Oczekiwanie na docelowe koordynaty (timeout={timeout_s}s, tolerancja={tolerance})...")
-                    
-                    # Zbieramy docelowe wartości i podmieniamy parametry w nawiasach klamrowych
-                    targets = {}
-                    for var_name, var_val_tmpl in verify_data.items():
-                        if var_name in ('tolerance', 'timeout'): 
-                            continue
-                        
-                        if isinstance(var_val_tmpl, str) and var_val_tmpl.startswith('{') and var_val_tmpl.endswith('}'):
-                            arg_name = var_val_tmpl.strip('{}')
-                            if arg_name not in data:
-                                raise ValueError(f"Missing argument '{arg_name}' for verify step in action '{function}'")
-                            targets[var_name] = float(data[arg_name])
-                        else:
-                            targets[var_name] = float(var_val_tmpl)
+        
+        # Usunięty ogólny blok try-except, by błędy natywnie przeszły do OcaBoxa
+        for step in action_steps:
+            if 'verify' in step:
+                verify_data = step['verify']
+                tolerance = float(verify_data.get('tolerance', 0.05))
+                timeout_s = int(verify_data.get('timeout', 120))
+                
+                logger.info(f"Oczekiwanie na docelowe koordynaty (timeout={timeout_s}s, tolerancja={tolerance})...")
+                
+                targets = {}
+                for var_name, var_val_tmpl in verify_data.items():
+                    if var_name in ('tolerance', 'timeout'): 
+                        continue
+                    if isinstance(var_val_tmpl, str) and var_val_tmpl.startswith('{') and var_val_tmpl.endswith('}'):
+                        arg_name = var_val_tmpl.strip('{}')
+                        if arg_name not in data:
+                            raise ValueError(f"Missing argument '{arg_name}' for verify step")
+                        targets[var_name] = float(data[arg_name])
+                    else:
+                        targets[var_name] = float(var_val_tmpl)
 
-                    position_reached = False
-                    for _ in range(timeout_s):
-                        all_match = True
-                        for var_name, target_val in targets.items():
-                            # Pobieramy aktualną pozycję od serwera
-                            curr_val = await self.get(component, var_name)
-                            if curr_val is None:
+                position_reached = False
+                for _ in range(timeout_s):
+                    all_match = True
+                    for var_name, target_val in targets.items():
+                        curr_val = await self.get(component, var_name)
+                        if curr_val is None:
+                            all_match = False
+                            break
+                        try:
+                            if abs(float(curr_val) - target_val) > tolerance:
                                 all_match = False
                                 break
-                            
-                            # Porównujemy z tolerancją błędu
-                            try:
-                                if abs(float(curr_val) - target_val) > tolerance:
-                                    all_match = False
-                                    break
-                            except ValueError:
-                                all_match = False
-                                break
-                                
-                        if all_match:
-                            position_reached = True
-                            logger.info(f"Teleskop osiągnął docelową pozycję dla akcji {function}!")
+                        except ValueError:
+                            all_match = False
                             break
                             
-                        # Jeśli jeszcze nie dojechał, czekamy 1 sekundę i pytamy ponownie
-                        await asyncio.sleep(1.0)
+                    if all_match:
+                        position_reached = True
+                        logger.info(f"Teleskop osiągnął docelową pozycję dla akcji {function}!")
+                        break
                         
-                    if not position_reached:
-                        raise TimeoutError(f"Ruch teleskopu nie zakończył się w wyznaczonym czasie {timeout_s}s.")
-                        
-                    continue # Krok weryfikacji zakończony sukcesem, przechodzimy do kolejnego kroku w YAML
+                    await asyncio.sleep(1.0)
+                    
+                if not position_reached:
+                    # Timeout też leci jako wyjątek prosto do klienta!
+                    raise TimeoutError(f"Ruch teleskopu nie zakończył się w wyznaczonym czasie {timeout_s}s.")
+                    
+                continue 
 
-                # --- Standardowe przetwarzanie kroku (interpolacja wartości i wysłanie komendy SET) ---
-                step_component_kind = step.get('component', component.kind)
-                step_variable = step['variable']
-                step_value = step['value']
-                
-                # Interpolacja zmiennych np. {Duration} lub {Azimuth}
-                if isinstance(step_value, str) and step_value.startswith('{') and step_value.endswith('}'):
-                    arg_name = step_value.strip('{}')
-                    if arg_name not in data:
-                        raise ValueError(f"Missing argument '{arg_name}' for action '{function}'")
-                    final_value = data[arg_name]
-                else:
-                    final_value = step_value
-                
-                target_component = component if step_component_kind == component.kind else component.root.component_by_absolute_sys_id(step_component_kind)
-                
-                # Używamy self.put, który obsłuży adresowanie i zabezpieczy komendę odpowiednią blokadą sprzętową
-                await self.put(target_component, step_variable, **{step_variable: final_value})
-
-            return {"status": f"action_{function}_completed"}
+            step_component_kind = step.get('component', component.kind)
+            step_variable = step['variable']
+            step_value = step['value']
             
-        except Exception as e:
-            logger.error(f"Pilar CALL failed for action {function}: {e}")
-            return {"status": "failed", "error": str(e)}
+            if isinstance(step_value, str) and step_value.startswith('{') and step_value.endswith('}'):
+                arg_name = step_value.strip('{}')
+                if arg_name not in data:
+                    raise ValueError(f"Missing argument '{arg_name}' for action '{function}'")
+                final_value = data[arg_name]
+            else:
+                final_value = step_value
+            
+            target_component = component if step_component_kind == component.kind else component.root.component_by_absolute_sys_id(step_component_kind)
+            
+            # Wysłanie komendy. Ewentualny wyjątek 'COMMAND FAILED' rzucony niżej poleci od razu do oca-boxa
+            await self.put(target_component, step_variable, **{step_variable: final_value})
+
+        # --- ZMIANA: Zwracamy None, aby poinformować OcaBox o pełnym sukcesie bez ładunku "Value", tak jak to robi Alpaca ---
+        return None
 
     async def subscribe(self, variables: Iterable[Tuple[str, str]], callback: Callable):
         logger.warning("Pilar protocol does not support subscriptions.")
