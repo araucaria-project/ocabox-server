@@ -43,15 +43,37 @@ components:
       sideofpier: "POINTING.STATE.SIDEOFPIER"
     actions:
       slewtocoordinates:
+        - variable: "epoch"
+          value: 2000.0
+        - variable: "equinox"
+          value: 2000.0
         - variable: "rightascension"
           value: "{RightAscension}"
         - variable: "declination"
           value: "{Declination}"
+        - tracking: "tracking"
+          value: 2
+        - verify:
+            rightascension: "{RightAscension}"
+            declination: "{Declination}"
+            tolerance: 0.05
+            timeout: 120
       slewtocoordinatesasync:
+        - variable: "epoch"
+          value: 2000.0
+        - variable: "equinox"
+          value: 2000.0
         - variable: "rightascension"
           value: "{RightAscension}"
         - variable: "declination"
           value: "{Declination}"
+        - tracking: "tracking"
+          value: 2
+        - verify:
+            rightascension: "{RightAscension}"
+            declination: "{Declination}"
+            tolerance: 0.05
+            timeout: 120
       slewtoaltaz:
         - variable: "azimuth"
           value: "{Azimuth}"
