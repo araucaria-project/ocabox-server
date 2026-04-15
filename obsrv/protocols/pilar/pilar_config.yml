@@ -145,16 +145,16 @@ components:
 
   covercalibratior:
     mappings:
-      coverstate:
+      coverstate: "AUXILIARY.COVER.TARGETPOS"
       calibratorstate:
       brightness:
     actions:
       opencover:
         - variable: "coverstate"
-          value: "OPEN"
+          value: "1"
       closecover:
         - variable: "coverstate"
-          value: "CLOSED"
+          value: "0"
       calibratoron:
         - variable: "brightness"
           value: "{Brightness}"
