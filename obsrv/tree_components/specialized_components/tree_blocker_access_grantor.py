@@ -23,6 +23,9 @@ class TreeBlockerAccessGrantor(TreeProvider):
         - current_user - this command return current user witch one is currently accessing
         - timeout_current_control - this command return timeout for currently accessing user
         - is_access - this method checks if the requesting user has control and return True if so
+        - engage_safety_cutoff - engage the safety cutoff switch blocking dangerous commands
+        - disengage_safety_cutoff - disengage the safety cutoff switch restoring normal operation
+        - safety_cutoff_state - return the current safety cutoff state and list of blocked commands
     """
 
     COMPONENT_DEFAULT_NAME: str = 'TreeBlockerAccessGrantor'
@@ -96,5 +99,22 @@ class TreeBlockerAccessGrantor(TreeProvider):
                 return Value(v=True, ts=time.time())
             else:
                 return Value(v=False, ts=time.time())
+
+        if command == 'engage_safety_cutoff' and request_type == 'PUT':
+            self._target_blocker.engage_safety_cutoff()
+            logger.info(f"The user: {user} engaged the safety cutoff.")
+            return Value(v=True, ts=time.time())
+
+        if command == 'disengage_safety_cutoff' and request_type == 'PUT':
+            self._target_blocker.disengage_safety_cutoff()
+            logger.info(f"The user: {user} disengaged the safety cutoff.")
+            return Value(v=True, ts=time.time())
+
+        if command == 'safety_cutoff_state':
+            out = {
+                'engaged': self._target_blocker.is_safety_cutoff_engaged(),
+                'blocked_commands': self._target_blocker.get_safety_cutoff_list(),
+            }
+            return Value(v=out, ts=time.time())
 
         raise AddressError(code=1002, message=f'Unrecognised method for module {self.get_name()}')

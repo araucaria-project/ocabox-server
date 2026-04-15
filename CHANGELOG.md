@@ -3,6 +3,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.3.10]
+### Added
+- Safety cutoff switch in `TreeBaseRequestBlocker` for dome entry protection
+- Configurable list of dangerous commands blocked when cutoff is engaged (slew, dome movement, mirror covers, tracking, motor control)
+- New commands in `TreeBlockerAccessGrantor`: `engage_safety_cutoff`, `disengage_safety_cutoff`, `safety_cutoff_state`
+- Dedicated bypass parameter `request_safety_cutoff_bypass_param` for manual control devices operated inside the dome
+- Distinct error code 1005 for safety cutoff blocks (separate from access denied 1004)
+- Default `safety_cutoff_list` in configuration with 17 blocked commands
+
 ## [2.2.0]
 ### Fixed
 - Ensure `_on_subcontractor_return` is always called in `TreeBaseProvider`, preventing stale CyclicQuery cache
