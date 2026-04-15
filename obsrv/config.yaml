@@ -53,6 +53,26 @@ data_collection:
     black_list:
       GET: []
       PUT: []
+    safety_cutoff_list:
+      # Mount movement
+      - slewtocoordinates
+      - slewtocoordinatesasync
+      - slewtoaltaz
+      - slewtoaltazasync
+      - park
+      - unpark
+      - findhome
+      - pulseguide
+      - tracking
+      - motoron
+      - motoroff
+      # Dome movement
+      - slewtoazimuth
+      - openshutter
+      - closeshutter
+      # Mirror covers
+      - opencover
+      - closecover
   TreeConditionalFreezer:
     max_unsuccessful_refreshes: 10
     alarm_timeout: 2 # WARNING, the value should be greater than the overall timeout
@@ -60,6 +80,7 @@ data_collection:
   TreeCache:
     no_cachable_regex:
       - .*\.is_access$
+      - .*\.safety_cutoff_state$
   TreeCCTV:   # Ubiquity CCTV camera
     udm_camera_id: ''
     udm_host: ''
