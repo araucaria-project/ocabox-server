@@ -96,6 +96,12 @@ class PilarConnector(Connector):
                 "pool_get": config['settings']['timeouts']['pool_get'].get(float),
             }
 
+            try:
+                self._focuser_multiplier = config['settings']['focuser']['multiplier'].get(float)
+            except confuse.NotFoundError:
+                self._focuser_multiplier = 1000.0  # Wartość domyślna w razie braku wpisu w configu
+                logger.warning("No settings.focuser.multiplier in configuration. Use default value: 1000.0")
+            
             self._resource_lock_map = config['resource_locks'].get(dict)
             self._command_map = {}
             self._actions_map = {}
@@ -223,7 +229,14 @@ class PilarConnector(Connector):
             # Pobierz zasoby (to tu następuje zrównoleglenie - różne wątki dostają różne conn)
             conn, cmd_id = await self._get_connection_resources(address)
             try:
-                return await conn.execute(cmd_id, command, timeout=self._timeouts['get'])
+                result = await conn.execute(cmd_id, command, timeout=self._timeouts['get'])
+                if component.kind == 'focuser' and variable == 'position':
+                    if isinstance(result, (int, float)):
+                        # Używamy round() przed int(), aby uniknąć błędów precyzji float 
+                        # np. 25.123 * 1000 = 25122.9999999 -> bez round wyszłoby 25122
+                        result = int(round(result * self._focuser_multiplier))
+                
+                return result
             finally:
                 await self._return_connection_resources(address, conn, cmd_id)
         except Exception as e:
@@ -246,6 +259,12 @@ class PilarConnector(Connector):
             if not data:
                 return {"status": "failed", "error": "Missing input value."}
             value = list(data.values())[0]
+            if component.kind == 'focuser' and variable == 'position':
+                try:
+                    # Zamieniamy na float, dzielimy i zaokrąglamy dla bezpieczeństwa
+                    value = round(float(value) / self._focuser_multiplier, 4)
+                except (ValueError, TypeError):
+                    pass # Jeśli klient wysłał bzdurę typu string "START", nie ruszamy, Pilar wyrzuci błąd
             command = f"SET {pilar_cmd}={value}"
             
             resource_name = self._resource_lock_map.get(pilar_cmd)
