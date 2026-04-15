@@ -6,6 +6,8 @@ settings:
     get_command: 10.0
     set_command: 120.0
     pool_get: 5.0
+  focuser:
+    multiplier: 1000.0
 
 components:
   focuser:
@@ -15,6 +17,7 @@ components:
       ismoving: "POINTING.SETUP.FOCUS.ISMOVING"
       fansstatus: "AUXILIARY.FANS.STATUS"
       halt: "POINTING.SETUP.FOCUS.HALT"
+      tracking: "POINITNG.TRACK"
     actions:
       fansturnon:
         - variable: "fansstatus"
@@ -25,6 +28,8 @@ components:
       move:
         - variable: "position"
           value: "{Position}"
+        - variable: "tracking"
+          value: 4
 
   telescope: # 'telescope' jest używane jako standardowa nazwa dla komponentu 'mount'
 #    reading:
