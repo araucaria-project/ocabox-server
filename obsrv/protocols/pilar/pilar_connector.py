@@ -228,8 +228,8 @@ class PilarConnector(Connector):
         except KeyError:
             raise TreeStructureError(
                 code=3002,
-                message=f"Method {variable!r} is not implemented on {component!r}",
-            )
+                message=f"Method {variable!r} is not implemented on {component.kind}",
+            ) from None
 
         try:
             command = f"GET {pilar_cmd}"
@@ -256,14 +256,20 @@ class PilarConnector(Connector):
         if not address:
              raise ValueError(f"No address configured for component {component.sys_id}")
 
-        try:
-            # --- DODANY KOD: Automatyczne przekierowanie akcji (np. slewtoaltaz) do metody call ---
-            if component.kind in self._actions_map and variable in self._actions_map[component.kind]:
-                logger.info(f"Przekierowuje PUT '{variable}' do CALL, poniewaz jest zdefiniowane jako akcja.")
-                return await self.call(component, variable, **data)
-            # --------------------------------------------------------------------------------------
+        # Automatyczne przekierowanie akcji (np. slewtoaltaz) do metody call
+        if component.kind in self._actions_map and variable in self._actions_map[component.kind]:
+            logger.info(f"Przekierowuje PUT '{variable}' do CALL, poniewaz jest zdefiniowane jako akcja.")
+            return await self.call(component, variable, **data)
 
+        try:
             pilar_cmd = self._command_map[component.kind][variable]
+        except KeyError:
+            raise TreeStructureError(
+                code=3002,
+                message=f"Method {variable!r} is not implemented on {component.kind}",
+            ) from None
+
+        try:
             if not data:
                 return {"status": "failed", "error": "Missing input value."}
             value = list(data.values())[0]

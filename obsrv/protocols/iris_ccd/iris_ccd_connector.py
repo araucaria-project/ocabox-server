@@ -132,15 +132,15 @@ class IrisCcdConnector(Connector):
         except KeyError:
             raise TreeStructureError(
                 code=3002,
-                message=f"Method {variable!r} is not implemented on {component!r}",
-            )
+                message=f"Method {variable!r} is not implemented on {component.kind}",
+            ) from None
 
         try:
             command_base = command_def.get('command')
             if command_base is None:
                 raise TreeStructureError(
                     code=3002,
-                    message=f"Malformed command definition for {variable!r} on {component!r}: missing 'command' key",
+                    message=f"Malformed command definition for {variable!r} on {component.kind}: missing 'command' key",
                 )
             get_arg = command_def.get('get_arg')
             if get_arg:
@@ -185,15 +185,15 @@ class IrisCcdConnector(Connector):
         except KeyError:
             raise TreeStructureError(
                 code=3002,
-                message=f"Method {variable!r} is not implemented on {component!r}",
-            )
+                message=f"Method {variable!r} is not implemented on {component.kind}",
+            ) from None
 
         try:
             command_base = command_def.get('command')
             if command_base is None:
                 raise TreeStructureError(
                     code=3002,
-                    message=f"Malformed command definition for {variable!r} on {component!r}: missing 'command' key",
+                    message=f"Malformed command definition for {variable!r} on {component.kind}: missing 'command' key",
                 )
             if not data:
                 return {"status": "failed", "error": "Missing input value."}
