@@ -7,6 +7,7 @@ import confuse
 
 from obsrv.protocols.alpaca.alpaca_connector import Connector
 from obcom.data_colection.address import AddressError
+from obcom.data_colection.coded_error import TreeStructureError
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -224,6 +225,13 @@ class PilarConnector(Connector):
 
         try:
             pilar_cmd = self._command_map[component.kind][variable]
+        except KeyError:
+            raise TreeStructureError(
+                code=3002,
+                message=f"Method {variable!r} is not implemented on {component!r}",
+            )
+
+        try:
             command = f"GET {pilar_cmd}"
             
             # Pobierz zasoby (to tu następuje zrównoleglenie - różne wątki dostają różne conn)

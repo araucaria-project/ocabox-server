@@ -5,6 +5,7 @@ from typing import Iterable, Callable, Tuple, Dict
 import confuse
 
 from obsrv.protocols.alpaca.alpaca_connector import Connector
+from obcom.data_colection.coded_error import TreeStructureError
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -128,7 +129,19 @@ class IrisCcdConnector(Connector):
              
         try:
             command_def = self._command_map[component.kind][variable]
-            command_base = command_def['command']
+        except KeyError:
+            raise TreeStructureError(
+                code=3002,
+                message=f"Method {variable!r} is not implemented on {component!r}",
+            )
+
+        try:
+            command_base = command_def.get('command')
+            if command_base is None:
+                raise TreeStructureError(
+                    code=3002,
+                    message=f"Malformed command definition for {variable!r} on {component!r}: missing 'command' key",
+                )
             get_arg = command_def.get('get_arg')
             if get_arg:
                 command = f"{command_base} {get_arg}"
@@ -158,7 +171,7 @@ class IrisCcdConnector(Connector):
             # 3. Zwracamy odpowiedź (jeśli to nie jest camerastate, zwróci tekst)
             return raw_response
             
-        except (KeyError, TimeoutError, ConnectionError, RuntimeError) as e:
+        except (TimeoutError, ConnectionError, RuntimeError) as e:
             logger.error(f"IRIS CCD GET failed for {component.kind}.{variable}: {e}")
             return None
 
@@ -169,14 +182,26 @@ class IrisCcdConnector(Connector):
 
         try:
             command_def = self._command_map[component.kind][variable]
-            command_base = command_def['command']
+        except KeyError:
+            raise TreeStructureError(
+                code=3002,
+                message=f"Method {variable!r} is not implemented on {component!r}",
+            )
+
+        try:
+            command_base = command_def.get('command')
+            if command_base is None:
+                raise TreeStructureError(
+                    code=3002,
+                    message=f"Malformed command definition for {variable!r} on {component!r}: missing 'command' key",
+                )
             if not data:
                 return {"status": "failed", "error": "Missing input value."}
             value = list(data.values())[0]
             command = f"{command_base} {value}"
             response = await self._execute_command(address, command)
             return {"status": "ok", "response": response}
-        except (KeyError, TimeoutError, ConnectionError, RuntimeError) as e:
+        except (TimeoutError, ConnectionError, RuntimeError) as e:
             logger.error(f"IRIS CCD PUT failed for {component.kind}.{variable}: {e}")
             return {"status": "failed", "error": str(e)}
 
