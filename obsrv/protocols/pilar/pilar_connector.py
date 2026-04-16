@@ -256,9 +256,9 @@ class PilarConnector(Connector):
         if not address:
              raise ValueError(f"No address configured for component {component.sys_id}")
 
-        # Automatyczne przekierowanie akcji (np. slewtoaltaz) do metody call
+        # Automatically redirect actions (e.g. slewtoaltaz) to the call method
         if component.kind in self._actions_map and variable in self._actions_map[component.kind]:
-            logger.info(f"Przekierowuje PUT '{variable}' do CALL, poniewaz jest zdefiniowane jako akcja.")
+            logger.info(f"Redirecting PUT '{variable}' to CALL because it is defined as an action.")
             return await self.call(component, variable, **data)
 
         try:
@@ -275,10 +275,10 @@ class PilarConnector(Connector):
             value = list(data.values())[0]
             if component.kind == 'focuser' and variable == 'position':
                 try:
-                    # Zamieniamy na float, dzielimy i zaokrąglamy dla bezpieczeństwa
+                    # Convert to float, divide and round for safety
                     value = round(float(value) / self._focuser_multiplier, 4)
                 except (ValueError, TypeError):
-                    pass # Jeśli klient wysłał bzdurę typu string "START", nie ruszamy, Pilar wyrzuci błąd
+                    pass  # If the client sent garbage like a string "START", leave it as-is; Pilar will raise an error
             command = f"SET {pilar_cmd}={value}"
             
             resource_name = self._resource_lock_map.get(pilar_cmd)
@@ -291,8 +291,8 @@ class PilarConnector(Connector):
                 finally:
                     await self._return_connection_resources(address, conn, cmd_id)
 
-            # Jeśli komenda wymaga wyłączności (np. ruch teleskopu), używamy logicznej blokady
-            # Inne komendy (np. zapalenie lampy) mogą iść równolegle
+            # If the command requires exclusive access (e.g. telescope slew), use a logical lock.
+            # Other commands (e.g. lamp on) can run in parallel.
             if lock:
                 async with lock:
                     await _do_put()
