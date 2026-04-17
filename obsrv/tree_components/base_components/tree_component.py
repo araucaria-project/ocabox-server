@@ -70,6 +70,30 @@ class TreeComponent(ABC):
     def get_type(self):
         return type(self).__name__
 
+    def get_publishable_config(self) -> Optional[dict]:
+        """
+        Opt-in contract for the observatory config payload published to NATS
+        (see ``BaseRequestSolver._collect_telescope_entries``). Return ``None``
+        to opt out (default).
+
+        Expected return shape (one of):
+
+        * ``{"role": "target", "target": <name>}`` — marks a telescope-root
+          provider; descendants are collected under this ``<name>``.
+        * ``{"role": "observatory", "observatory_config_name": <name>,
+          "observatory": <dict>, ...}`` — observatory adapter; contributes the
+          ``observatory`` block for the enclosing target. Falls back to
+          ``observatory_config_name`` as the target when no enclosing ``target``.
+        * ``{"role": "service", "key": <name>, "address": <addr>,
+          "type": <class_name>, ...}`` — per-telescope service component
+          (access_grantor, executor, custom_guider, ephemeris, ...); attached
+          to the enclosing target under ``services[<key>]``.
+
+        Keys beyond ``role``/``key`` are passed through to the payload so
+        concrete subclasses can advertise component-specific metadata.
+        """
+        return None
+
     @abstractmethod
     def post_init_tree(self, tree_data: TreeData, tree_path: str):
         """
