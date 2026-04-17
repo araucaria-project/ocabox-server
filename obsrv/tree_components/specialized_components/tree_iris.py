@@ -3,6 +3,7 @@ TreeIrisObservatory - Tree adapter for IRIS Observatory.
 """
 import logging
 import time
+from typing import Optional
 
 from obcom.data_colection.address import AddressError
 from obcom.data_colection.coded_error import BaseCodedError
@@ -116,3 +117,12 @@ class TreeIrisObservatory(TreeBaseProvider):
             out.get(self.get_name()).get("config").update({"observatory_config": obs_cfg})
             out.get(self.get_name()).get("config").update({"observatory_config_name": self.observatory_name})
         return out
+
+    def get_publishable_config(self) -> Optional[dict]:
+        if not self._observatory:
+            return None
+        return {
+            "role": "observatory",
+            "observatory_config_name": self.observatory_name,
+            "observatory": self._observatory.observatory_configuration_rare,
+        }
