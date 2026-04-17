@@ -10,8 +10,13 @@ from serverish.messenger import get_reader
 from obsrv.communication.base_request_solver import BaseRequestSolver
 from obsrv.communication.nats_streams import NatsStreams
 from obsrv.communication.request_solver import RequestSolver
+from obsrv.tree_components.base_components.tree_base_broker import TreeBaseBroker
 from obsrv.tree_components.base_components.tree_base_broker_default_target import TreeBaseBrokerDefaultTarget
+from obsrv.tree_components.base_components.tree_provider import TreeProvider
 from obsrv.tree_components.specialized_components.tree_alpaca import TreeAlpacaObservatory
+from obsrv.tree_components.specialized_components.tree_base_request_blocker import TreeBaseRequestBlocker
+from obsrv.tree_components.specialized_components.tree_blocker_access_grantor import TreeBlockerAccessGrantor
+from obsrv.tree_components.specialized_components.tree_plan_executor import TreePlanExecutor
 from obsrv.ob_config import SingletonConfig
 from obsrv.utils.asyncio_util_functions import wait_for_psce
 from test.data_collection.sample_test_value_provider import SampleTestValueProvider
@@ -36,15 +41,74 @@ class RequestSolverTest(unittest.IsolatedAsyncioTestCase):
         self.RS._nats_host = "localhost"
 
     def test_get_config_alpaca(self):
-        """test checks if the method `_get_alpaca_modules_configuration()` correctly returns the configuration
+        """test checks if the method `_collect_telescope_entries()` correctly returns the configuration
         of the observatories"""
         OBSERVATORY_NAME = 'test_observatory'
         tao = TreeAlpacaObservatory(component_name='jk98', observatory_name=OBSERVATORY_NAME)
         broker = TreeBaseBrokerDefaultTarget(component_name="broker", list_providers=[], default_provider=tao)
         rs = RequestSolver(broker)
-        cfg = rs._get_alpaca_modules_configuration()
+        cfg = rs._collect_telescope_entries()
         configuration = SingletonConfig.get_config()
         self.assertDictEqual(cfg, {OBSERVATORY_NAME: configuration["tree"][OBSERVATORY_NAME].get()})
+
+    def test_walker_publishes_services_under_target(self):
+        """Services (access_grantor, executor) wired as siblings of the observatory under a
+        per-telescope broker should appear in the payload grouped under the enclosing
+        TreeProvider's target name."""
+        OBSERVATORY_NAME = 'test_observatory'
+        tao = TreeAlpacaObservatory(component_name='jk99', observatory_name=OBSERVATORY_NAME)
+        blocker = TreeBaseRequestBlocker(component_name='blocker-j', subcontractor=tao)
+        access_grantor = TreeBlockerAccessGrantor(
+            component_name='access-grantor-j', source_name='access_grantor', target_blocker=blocker,
+        )
+        executor = TreePlanExecutor(component_name='executor-j', source_name='executor')
+        per_target_broker = TreeBaseBrokerDefaultTarget(
+            component_name='broker-j',
+            list_providers=[access_grantor, executor],
+            default_provider=blocker,
+        )
+        target = TreeProvider(
+            component_name='target-provider-j', source_name=OBSERVATORY_NAME,
+            subcontractor=per_target_broker,
+        )
+        front = TreeBaseBroker(component_name='front', list_providers=[target])
+        rs = RequestSolver(front)
+
+        cfg = rs._collect_telescope_entries()
+
+        self.assertIn(OBSERVATORY_NAME, cfg)
+        entry = cfg[OBSERVATORY_NAME]
+        self.assertIn('observatory', entry)
+        self.assertIn('services', entry)
+        self.assertEqual(
+            set(entry['services'].keys()),
+            {'access_grantor', 'executor'},
+        )
+        self.assertEqual(entry['services']['access_grantor']['type'], 'TreeBlockerAccessGrantor')
+        self.assertEqual(entry['services']['access_grantor']['address'], 'access_grantor')
+        self.assertEqual(entry['services']['executor']['type'], 'TreePlanExecutor')
+        self.assertEqual(entry['services']['executor']['address'], 'executor')
+
+    def test_walker_drops_service_without_enclosing_target(self):
+        """Service-role components reached without an enclosing TreeProvider should be
+        silently skipped — services are per-telescope, so they need a target to attach to."""
+        tao = TreeAlpacaObservatory(component_name='jk100', observatory_name='test_observatory')
+        blocker = TreeBaseRequestBlocker(component_name='blocker-k', subcontractor=tao)
+        access_grantor = TreeBlockerAccessGrantor(
+            component_name='access-grantor-k', source_name='access_grantor', target_blocker=blocker,
+        )
+        broker = TreeBaseBrokerDefaultTarget(
+            component_name='broker-k',
+            list_providers=[access_grantor],
+            default_provider=blocker,
+        )
+        rs = RequestSolver(broker)
+
+        cfg = rs._collect_telescope_entries()
+
+        # Observatory self-resolves its target via observatory_config_name; service is dropped.
+        self.assertIn('test_observatory', cfg)
+        self.assertNotIn('services', cfg['test_observatory'])
 
     async def test_connect_to_nats_failed(self):
         """test connect to nats failed"""

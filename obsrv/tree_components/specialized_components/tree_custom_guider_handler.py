@@ -31,3 +31,12 @@ class TreeCustomGuiderHandler(TreeProvider):
 
         raise AddressError(code=1002, message=f'Deprecated module {self.get_name()}')
 
+    def get_publishable_config(self) -> Optional[dict]:
+        source_name = self.get_source_name()
+        return {
+            "role": "service",
+            "key": source_name,
+            "address": source_name,
+            "type": type(self).__name__,
+        }
+

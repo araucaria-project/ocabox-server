@@ -5,6 +5,7 @@ import functools
 import logging
 import param
 import time as time_module
+from typing import Optional
 from astropy.coordinates import EarthLocation, get_moon, get_sun, AltAz, SkyCoord
 from astropy.time import Time
 from obcom.data_colection.address import AddressError
@@ -126,3 +127,12 @@ class TreeEphemeris(TreeProvider):
     async def stop(self):
         await self.data.stop()
         return await super().stop()
+
+    def get_publishable_config(self) -> Optional[dict]:
+        source_name = self.get_source_name()
+        return {
+            "role": "service",
+            "key": source_name,
+            "address": source_name,
+            "type": type(self).__name__,
+        }

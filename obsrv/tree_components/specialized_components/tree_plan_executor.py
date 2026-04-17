@@ -1,5 +1,6 @@
 import logging
 import time
+from typing import Optional
 
 from obcom.data_colection.address import AddressError
 from obsrv.tree_components.base_components.tree_provider import TreeProvider
@@ -36,3 +37,12 @@ class TreePlanExecutor(TreeProvider):
             timeout_control = "response string"
             return Value(v=timeout_control, ts=time.time())
         raise AddressError(code=1002, message=f'Unrecognised method for module {self.get_name()}')
+
+    def get_publishable_config(self) -> Optional[dict]:
+        source_name = self.get_source_name()
+        return {
+            "role": "service",
+            "key": source_name,
+            "address": source_name,
+            "type": type(self).__name__,
+        }

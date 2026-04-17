@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import List
+from typing import Iterable, List, Optional
 from abc import ABC, abstractmethod
 import confuse
 from nats.errors import TimeoutError
@@ -11,7 +11,7 @@ from obcom.data_colection.response_error import ResponseError
 from obsrv.utils.tree_data import TreeData
 from obcom.data_colection.tree_user import TreeUser, TreeServiceUser
 from obcom.data_colection.value_call import ValueRequest, ValueResponse
-from obsrv.tree_components.base_components.tree_component import ProvidesResponseProtocol
+from obsrv.tree_components.base_components.tree_component import ProvidesResponseProtocol, TreeComponent
 from obsrv.ob_config import SingletonConfig
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
@@ -69,7 +69,7 @@ class BaseRequestSolver(ABC):
         #     logger.error(f"Can not connect to server NATS")
         #     raise RuntimeError("Can not connect to server NATS")
         await self.data_provider.run()
-        await self._nats_update_config_alpaca()
+        await self._nats_update_config_observatories()
 
     async def stop_tree(self):
         """
@@ -142,24 +142,87 @@ class BaseRequestSolver(ABC):
         """
         return self.data_provider.get_configuration()
 
-    def _get_alpaca_modules_configuration(self) -> dict:
-        configuration_tree = self.get_tree_configuration()
-        out = {}
-        alpacas = self._find_alpacas(configuration_tree)
-        for a in alpacas:
-            out.update(a)
-        return out
+    def _collect_telescope_entries(self) -> dict:
+        """
+        Walk the runtime tree and collect publishable config entries, grouped
+        by telescope target. Replaces the previous class-name-whitelisted walk
+        that only recognized ``TreeAlpacaObservatory``.
 
-    def _find_alpacas(self, config) -> list:
-        from obsrv.tree_components.specialized_components.tree_alpaca import TreeAlpacaObservatory
-        li = []
-        for key, val in config.items():
-            if val.get("type", "") == TreeAlpacaObservatory.__name__:
-                name = val.get("config", None).get("observatory_config_name", key) if val.get("config", None) else key
-                li.append({name: val.get("config", {}).get("observatory_config")})
-            else:
-                li = li + self._find_alpacas(config=val.get("child", []))
-        return li
+        Each ``TreeComponent`` can opt in via
+        :meth:`TreeComponent.get_publishable_config` by returning a dict with a
+        ``role`` of ``target`` (establishes a target boundary),
+        ``observatory`` (contributes the ``observatory`` block), or
+        ``service`` (attaches under ``services[<key>]``).
+
+        Return shape::
+
+            {
+                "<target>": {
+                    "observatory": <rare observatory dict>,  # if provided
+                    "services": {                             # if any
+                        "<key>": {"type": ..., "address": ..., ...},
+                    },
+                },
+                ...
+            }
+
+        The ``observatory`` key alone (no wrapper) preserves backward
+        compatibility with clients that read
+        ``cfg['telescopes'][name]['observatory']``.
+        """
+        entries: dict = {}
+        if isinstance(self.data_provider, TreeComponent):
+            self._walk_publishable(self.data_provider, current_target=None, entries=entries)
+        return entries
+
+    def _walk_publishable(self, component, current_target: Optional[str], entries: dict) -> None:
+        pub = None
+        if isinstance(component, TreeComponent):
+            pub = component.get_publishable_config()
+
+        new_target = current_target
+        if pub is not None:
+            role = pub.get("role")
+            if role == "target":
+                new_target = pub.get("target") or new_target
+            elif role == "observatory":
+                # Fall back to observatory_config_name when no enclosing target
+                # (e.g. unit tests that don't wrap the observatory in a provider).
+                target = current_target or pub.get("observatory_config_name")
+                if target is not None:
+                    entries.setdefault(target, {})["observatory"] = pub.get("observatory", {})
+            elif role == "service":
+                if current_target is not None:
+                    key = pub.get("key") or pub.get("type") or "unknown"
+                    service_entry = {k: v for k, v in pub.items() if k != "role"}
+                    entries.setdefault(current_target, {}).setdefault("services", {})[key] = service_entry
+
+        for child in self._iter_tree_children(component):
+            self._walk_publishable(child, new_target, entries)
+
+    @staticmethod
+    def _iter_tree_children(component) -> Iterable:
+        """
+        Yield immediate tree children of a component without requiring each
+        class to expose a uniform interface. Covers the three child-holding
+        shapes in use: ``TreeBaseBroker`` (list providers),
+        ``TreeBaseBrokerDefaultTarget`` (default provider, not in list), and
+        ``TreeBaseProvider`` (subcontractor).
+        """
+        list_providers = getattr(component, "get_list_providers", None)
+        providers = list_providers() if callable(list_providers) else []
+        for child in providers:
+            yield child
+
+        default_provider_getter = getattr(component, "get_default_provider", None)
+        if callable(default_provider_getter):
+            default = default_provider_getter()
+            if default is not None and default not in providers:
+                yield default
+
+        subcontractor = getattr(component, "_subcontractor", None)
+        if subcontractor is not None:
+            yield subcontractor
 
     @staticmethod
     def _get_site_cfg() -> dict:
@@ -172,30 +235,30 @@ class BaseRequestSolver(ABC):
             logger.warning("Can not find key: site  in configuration")
         return out
 
-    async def _nats_update_config_alpaca(self) -> bool:
+    async def _nats_update_config_observatories(self) -> bool:
         publisher = get_publisher(NatsStreams.ALPACA_CONFIG)
-        cfg = self._get_alpaca_modules_configuration()
+        cfg = self._collect_telescope_entries()
         site_cfg = self._get_site_cfg()
         try:
-            await publisher.publish(data={'version': "",  # todo uzupełnić
+            await publisher.publish(data={'version': "",  # todo version!
                                           'published': dt_utcnow_array(),
                                           'config': {'telescopes': cfg,
                                                      'site': site_cfg}},
                                     meta={
                                         "message_type": "config",  # IMPORTANT type message, one of pre declared types
-                                        "tags": ["config_alpaca"],
+                                        "tags": ["config_observatories"],
                                         'sender': 'Ocabox server',
                                     })
             out = True
         except MessengerNotConnected as e:
-            logger.error(f"Can not publish config alpaca to nats, error: {e}")
+            logger.error(f"Can not publish observatory config to nats, error: {e}")
             out = False
         except TimeoutError as e:
-            logger.error(f"Can not publish config alpaca to nats, error: {e}")
+            logger.error(f"Can not publish observatory config to nats, error: {e}")
             out = False
         return out
 
     async def reload_nats_config(self) -> bool:
         logger.debug(f"Resending configuration to nats")
         SingletonConfig.get_config(rebuild=True).get()  # reload configuration data
-        return await self._nats_update_config_alpaca()
+        return await self._nats_update_config_observatories()
