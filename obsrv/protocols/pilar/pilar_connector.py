@@ -7,28 +7,43 @@ import confuse
 
 from obsrv.protocols.alpaca.alpaca_connector import Connector
 from obcom.data_colection.address import AddressError
+from obcom.data_colection.coded_error import TreeOtherError
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'pilar_config.yml')
+
+# Socket-level failures that indicate the Pilar link is down / stale.
+# These are classified as SEVERITY_TEMPORARY so TreeConditionalFreezer can suppress them.
+_TEMPORARY_IO_ERRORS = (ConnectionError, BrokenPipeError, OSError, asyncio.TimeoutError, TimeoutError)
+
 
 class PilarConnection:
     """Reprezentuje pojedyncze, aktywne połączenie TCP z serwerem Pilar."""
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         self.reader = reader
         self.writer = writer
+        self.broken = False
 
     async def execute(self, cmd_id: int, command_str: str, timeout: float) -> str:
         """Wysyła komendę i czeka na odpowiedź pasującą do cmd_id."""
         full_command = f"{cmd_id} {command_str}\n"
-        self.writer.write(full_command.encode('utf-8'))
-        await self.writer.drain()
-        
+        try:
+            self.writer.write(full_command.encode('utf-8'))
+            await self.writer.drain()
+        except _TEMPORARY_IO_ERRORS:
+            self.broken = True
+            raise
+
         value_to_return = None
         while True:
-            # Czytamy linię po linii
-            line_bytes = await asyncio.wait_for(self.reader.readline(), timeout=timeout)
+            try:
+                line_bytes = await asyncio.wait_for(self.reader.readline(), timeout=timeout)
+            except _TEMPORARY_IO_ERRORS:
+                self.broken = True
+                raise
             if not line_bytes:
+                self.broken = True
                 raise ConnectionAbortedError("Pilar connection closed unexpectedly.")
             
             response_line = line_bytes.decode('utf-8').strip()
@@ -209,10 +224,27 @@ class PilarConnector(Connector):
              raise TimeoutError(f"No available connection or ID in the pool for {address}.")
 
     async def _return_connection_resources(self, address, conn, cmd_id):
-        """Zwraca zasoby do puli po zakończeniu komendy."""
-        if address in self._connection_pools:
+        """Zwraca zasoby do puli po zakończeniu komendy.
+        Zepsute połączenia (broken pipe, reset) są zamykane i zastępowane świeżymi,
+        żeby pula sama się leczyła po restartcie Pilara / idle-timeoucie sieci.
+        """
+        if address not in self._connection_pools:
+            return
+        if conn.broken:
+            try:
+                conn.writer.close()
+            except Exception:
+                pass
+            try:
+                host, port_str = address.split(':')
+                replacement = await self._create_single_connection(host, int(port_str))
+            except Exception:
+                replacement = None
+            if replacement is not None:
+                await self._connection_pools[address].put(replacement)
+        else:
             await self._connection_pools[address].put(conn)
-            await self._id_pools[address].put(cmd_id)
+        await self._id_pools[address].put(cmd_id)
 
     async def _get_address(self, component):
         return component.get_option_recursive('address')
@@ -225,23 +257,28 @@ class PilarConnector(Connector):
         try:
             pilar_cmd = self._command_map[component.kind][variable]
             command = f"GET {pilar_cmd}"
-            
+
             # Pobierz zasoby (to tu następuje zrównoleglenie - różne wątki dostają różne conn)
             conn, cmd_id = await self._get_connection_resources(address)
             try:
                 result = await conn.execute(cmd_id, command, timeout=self._timeouts['get'])
                 if component.kind == 'focuser' and variable == 'position':
                     if isinstance(result, (int, float)):
-                        # Używamy round() przed int(), aby uniknąć błędów precyzji float 
+                        # Używamy round() przed int(), aby uniknąć błędów precyzji float
                         # np. 25.123 * 1000 = 25122.9999999 -> bez round wyszłoby 25122
                         result = int(round(result * self._focuser_multiplier))
-                
+
                 return result
             finally:
                 await self._return_connection_resources(address, conn, cmd_id)
+        except _TEMPORARY_IO_ERRORS as e:
+            logger.warning(f"Pilar not responding at {address} ({component.kind}.{variable}): {e}")
+            raise TreeOtherError(address=None, code=4005,
+                                 message=f"Pilar not responding at {address}",
+                                 severity=TreeOtherError.SEVERITY_TEMPORARY) from e
         except Exception as e:
             logger.error(f"Pilar GET failed for {component.kind}.{variable} at {address}: {e}")
-            return None
+            raise
 
     async def put(self, component: 'Component', variable: str, kind=None, **data):
         address = await self._get_address(component)
@@ -286,6 +323,11 @@ class PilarConnector(Connector):
                 await _do_put()
                 
             return {"status": "ok", "value_set": value}
+        except _TEMPORARY_IO_ERRORS as e:
+            logger.warning(f"Pilar not responding at {address} ({component.kind}.{variable}): {e}")
+            raise TreeOtherError(address=None, code=4005,
+                                 message=f"Pilar not responding at {address}",
+                                 severity=TreeOtherError.SEVERITY_TEMPORARY) from e
         except Exception as e:
             logger.error(f"Pilar PUT failed for {component.kind}.{variable}: {e}")
             return {"status": "failed", "error": str(e)}
