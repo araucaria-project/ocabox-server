@@ -93,6 +93,13 @@ def main(argv=None):
     except RuntimeError:
         loop = asyncio.new_event_loop()
 
+    # Temporary diagnostic — investigate FD/socket-leak hypothesis behind
+    # cascade ALPACA "not responding" errors when one host is unreachable.
+    # Logs once per minute at WARNING level (visible under LOG_LEVEL=WARNING).
+    # Remove this block once the hypothesis is settled.
+    from obsrv.utils.runtime_diagnostics import schedule_runtime_diagnostics
+    schedule_runtime_diagnostics(loop, interval=60.0)
+
     def ask_exit():
         raise KeyboardInterrupt
     loop.add_signal_handler(signal.SIGINT, ask_exit)
