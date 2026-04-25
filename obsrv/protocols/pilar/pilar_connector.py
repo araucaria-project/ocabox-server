@@ -74,26 +74,39 @@ class PilarConnection:
 
 
 class PilarConnector(Connector):
+    # Wait before reconnecting tries.
+    _RECONNECT_COOLDOWN = 30.0
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._load_config()
-        
+
         # Słowniki przechowujące pule dla poszczególnych adresów (host:port)
         # Klucz: "IP:PORT", Wartość: Kolejka aktywnych obiektów PilarConnection
         self._connection_pools: Dict[str, asyncio.Queue[PilarConnection]] = {}
-        
+
         # Klucz: "IP:PORT", Wartość: Kolejka dostępnych ID transakcji
         self._id_pools: Dict[str, asyncio.Queue[int]] = {}
-        
+
         # Blokady logiczne dla zasobów (np. żeby nie ruszać Focuserem gdy inny wątek nim rusza)
         self._resource_locks: Dict[str, asyncio.Lock] = {
             resource_name: asyncio.Lock() for resource_name in set(self._resource_lock_map.values())
         }
-        
+
         # Blokada techniczna, aby nie tworzyć puli dla tego samego adresu wielokrotnie
-        self._connection_locks: Dict[str, asyncio.Lock] = {} 
-        
+        self._connection_locks: Dict[str, asyncio.Lock] = {}
+
+        self._reconnect_suppressed_until: Dict[str, float] = {}
+        self._outage_logged: Dict[str, bool] = {}
+
         logger.info(f'Pilar advanced connector created with pool size: {self._pool_size}')
+
+    def _is_outage(self, address: str) -> bool:
+        """True while the breaker is open for this address (don't spam per-request logs)."""
+        suppressed_until = self._reconnect_suppressed_until.get(address)
+        if suppressed_until is None:
+            return False
+        return asyncio.get_event_loop().time() < suppressed_until
 
     def _load_config(self):
         logger.info(f"Loading Pilar configuration from: {CONFIG_PATH}")
@@ -153,7 +166,7 @@ class PilarConnector(Connector):
                 await writer.start_tls(sc)
             return PilarConnection(reader, writer)
         except Exception as e:
-            logger.error(f"Failed to create a connection to {host}:{port}: {e}")
+            logger.debug(f"Failed to create a connection to {host}:{port}: {e}")
             return None
 
     async def _ensure_connected(self, address: str):
@@ -163,16 +176,24 @@ class PilarConnector(Connector):
         """
         # Szybkie sprawdzenie bez blokady
         if address in self._connection_pools:
-             return True 
-        
+            return True
+
+        # Circuit breaker: don't even try if we recently failed
+        loop_time = asyncio.get_event_loop().time()
+        if loop_time < self._reconnect_suppressed_until.get(address, 0.0):
+            return False
+
         if address not in self._connection_locks:
             self._connection_locks[address] = asyncio.Lock()
-        
+
         async with self._connection_locks[address]:
             # Ponowne sprawdzenie pod blokadą (double-check locking pattern)
             if address in self._connection_pools:
-                 return True 
-            
+                return True
+            loop_time = asyncio.get_event_loop().time()
+            if loop_time < self._reconnect_suppressed_until.get(address, 0.0):
+                return False
+
             try:
                 host, port_str = address.split(':')
                 port = int(port_str)
@@ -180,13 +201,14 @@ class PilarConnector(Connector):
                 logger.error(f"Invalid Pilar address format: {address}. Expected host:port")
                 raise AddressError(address, 1003, "Invalid address format")
 
-            logger.info(f"Initializing connection pool for {address} (Size: {self._pool_size})...")
-            
-            # 1. Przygotowanie puli ID
-            id_pool = asyncio.Queue()
-            for i in range(self._id_range[0], self._id_range[1] + 1):
-                id_pool.put_nowait(i)
-            self._id_pools[address] = id_pool
+            # ID pool persists across reconnect tries — only build it once
+            if address not in self._id_pools:
+                logger.info(f"Initializing connection pool for {address} (Size: {self._pool_size})...")
+                # 1. Przygotowanie puli ID
+                id_pool = asyncio.Queue()
+                for i in range(self._id_range[0], self._id_range[1] + 1):
+                    id_pool.put_nowait(i)
+                self._id_pools[address] = id_pool
 
             # 2. Nawiązywanie wielu połączeń równolegle
             creation_tasks = [self._create_single_connection(host, port) for _ in range(self._pool_size)]
@@ -199,29 +221,50 @@ class PilarConnector(Connector):
                 if conn:
                     conn_pool.put_nowait(conn)
                     active_count += 1
-            
+
             if active_count > 0:
                 self._connection_pools[address] = conn_pool
-                logger.info(f"Pilar connector connected to {address}. Active connections: {active_count}")
+                if self._outage_logged.pop(address, False):
+                    logger.warning(
+                        f"Pilar at {address} reconnected. Active connections: {active_count}"
+                    )
+                else:
+                    logger.info(
+                        f"Pilar connector connected to {address}. Active connections: {active_count}"
+                    )
+                self._reconnect_suppressed_until.pop(address, None)
                 return True
-            else:
-                logger.error(f"Failed to connect to Pilar at {address} (0 connections established).")
-                return False
+
+            # All attempts failed — open the breaker and log once per outage
+            self._reconnect_suppressed_until[address] = loop_time + self._RECONNECT_COOLDOWN
+            if not self._outage_logged.get(address, False):
+                logger.error(
+                    f"Pilar at {address} unreachable (0/{self._pool_size} connections established); "
+                    f"suppressing further attempts and per-request errors for "
+                    f"{self._RECONNECT_COOLDOWN:.0f}s."
+                )
+                self._outage_logged[address] = True
+            return False
 
     async def _get_connection_resources(self, address):
         """Pobiera jedno z wolnych połączeń i wolny ID z puli."""
-        await self._ensure_connected(address)
+        connected = await self._ensure_connected(address)
+        if not connected:
+            # Either breaker is open or this attempt just failed. Surface as a
+            # connection-class error so the caller's `_TEMPORARY_IO_ERRORS`
+            # branch translates it to SEVERITY_TEMPORARY without an ERROR log.
+            raise ConnectionError(f"Pilar at {address} not reachable")
         try:
             id_pool = self._id_pools[address]
             conn_pool = self._connection_pools[address]
-            
+
             # Czekamy na dostępność ID i Połączenia
             # Dzięki temu wiele zapytań może działać równolegle, dopóki są wolne sockety
             cmd_id = await asyncio.wait_for(id_pool.get(), timeout=self._timeouts['pool_get'])
             conn = await asyncio.wait_for(conn_pool.get(), timeout=self._timeouts['pool_get'])
             return conn, cmd_id
         except (KeyError, asyncio.TimeoutError):
-             raise TimeoutError(f"No available connection or ID in the pool for {address}.")
+            raise TimeoutError(f"No available connection or ID in the pool for {address}.")
 
     async def _return_connection_resources(self, address, conn, cmd_id):
         """Zwraca zasoby do puli po zakończeniu komendy.
@@ -279,7 +322,8 @@ class PilarConnector(Connector):
             finally:
                 await self._return_connection_resources(address, conn, cmd_id)
         except _TEMPORARY_IO_ERRORS as e:
-            logger.warning(f"Pilar not responding at {address} ({component.kind}.{variable}): {e}")
+            if not self._is_outage(address):
+                logger.warning(f"Pilar not responding at {address} ({component.kind}.{variable}): {e}")
             raise TreeOtherError(address=None, code=4005,
                                  message=f"Pilar not responding at {address}",
                                  severity=TreeOtherError.SEVERITY_TEMPORARY) from e
@@ -337,7 +381,8 @@ class PilarConnector(Connector):
                 
             return {"status": "ok", "value_set": value}
         except _TEMPORARY_IO_ERRORS as e:
-            logger.warning(f"Pilar not responding at {address} ({component.kind}.{variable}): {e}")
+            if not self._is_outage(address):
+                logger.warning(f"Pilar not responding at {address} ({component.kind}.{variable}): {e}")
             raise TreeOtherError(address=None, code=4005,
                                  message=f"Pilar not responding at {address}",
                                  severity=TreeOtherError.SEVERITY_TEMPORARY) from e
