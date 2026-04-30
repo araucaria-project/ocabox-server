@@ -11,6 +11,7 @@ from obcom.data_colection.value import Value, TreeValueError
 from obcom.data_colection.value_call import ValueRequest
 
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
+from obsrv.tree_components.specialized_components.tree_conditional_freezer import strip_tree_internal_fields
 from obsrv.telescope_devices.device_tree import Observatory
 from obsrv.utils.asyncio_util_functions import wait_for_psce
 
@@ -65,7 +66,7 @@ class TreeIrisObservatory(TreeBaseProvider):
         index = request.index
         iris_address = address[index:].copy()
         request_type = request.request_type
-        request_arguments = request.request_data
+        request_arguments = strip_tree_internal_fields(request.request_data)
         request_timeout = request.request_timeout
 
         if len(iris_address) <= 0:
