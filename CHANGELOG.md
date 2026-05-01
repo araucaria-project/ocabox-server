@@ -3,6 +3,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.3.13]
+### Added
+- `AlpacaConnector` translates Andor `DRV_ACQUIRING (20072)` to `TreeOtherError(code=4008, severity=TEMPORARY)` so clients can react to "device busy" without string-matching the wrapped error message. `AlpacaError` now retains `error_number` as an attribute.
+### Dependencies
+- ocabox-common bumped to `1.0.3` (registers code 4008 description).
+
 ## [2.3.10]
 ### Added
 - Safety cutoff switch in `TreeBaseRequestBlocker` for dome entry protection
