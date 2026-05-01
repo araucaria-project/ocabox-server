@@ -15,6 +15,11 @@ from obsrv.protocols.alpaca.alpaca_exceptions import AlpacaError, AlpacaHttpErro
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 
+# Vendor SDK error codes that map to TreeOtherError(4008) "device busy".
+# 20072 = Andor DRV_ACQUIRING (acquisition in progress).
+_DEVICE_BUSY_ERRNOS = frozenset({20072})
+
+
 class Connector:
     """Base connector class for all telescope protocols."""
 
@@ -276,6 +281,9 @@ class AlpacaConnector(Connector):
         except AlpacaError as e:
             # when server alpaca throws an error with a numeric value
             logger.warning(f"Alpaca throw numeric error for request {address}")
+            if e.error_number in _DEVICE_BUSY_ERRNOS:
+                raise TreeOtherError(address=None, code=4008, message=e.message,
+                                     severity=TreeOtherError.SEVERITY_TEMPORARY)
             raise TreeValueError(address=None, code=2002, message=e.message)
         except AlpacaHttpError as e:
             # if server alpaca return unresolved error

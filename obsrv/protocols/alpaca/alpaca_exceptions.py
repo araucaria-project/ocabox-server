@@ -17,6 +17,7 @@ class AlpacaError(DeviceResponseError):
     def __init__(self, error_number: int, error_message: str):
         """Initialize NumericError object."""
         super().__init__(self)
+        self.error_number = error_number
         self.message = "Error %d: %s" % (error_number, error_message)
 
     def __str__(self):
