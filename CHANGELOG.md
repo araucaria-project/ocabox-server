@@ -3,6 +3,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.3.13]
+### Added
+- `AlpacaConnector` translates Andor `DRV_ACQUIRING (20072)` to `TreeOtherError(code=4008, severity=TEMPORARY)` so clients can react to "device busy" without string-matching the wrapped error message. `AlpacaError` now retains `error_number` as an attribute.
+### Dependencies
+- ocabox-common bumped to `1.0.3` (registers code 4008 description).
+
+## [2.3.12]
+### Fixed
+- Strip cyclic-query bookkeeping (`time_of_known_change`, `no_send_before`, `nr_of_unsuccessful_refreshes`) before forwarding requests to protocol connectors. The leak caused jk15-tcu's strict ASCOM driver to reject GETs with HTTP 400, freezing the cache at the last successful value (e.g. `camera.state` stuck at `EXPOSING` for hours).
+
 ## [2.3.10]
 ### Added
 - Safety cutoff switch in `TreeBaseRequestBlocker` for dome entry protection
