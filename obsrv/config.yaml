@@ -3,6 +3,10 @@ LOG_LEVEL: INFO
 OCABOX_BUILD_FILE_NAME: "tree_build_example.py"   # file name witch tree build plans, this property can be set only in configuration/config.yaml or environment property
 OCABOX_VERSION: "2"
 
+runtime_diagnostics:
+  enabled: false        # opt-in process diagnostics (fds, sockets, RSS, event-loop lag, GC, top peers)
+  interval: 60.0        # seconds between samples
+
 nats:
   host: "localhost"
   port: 4222
