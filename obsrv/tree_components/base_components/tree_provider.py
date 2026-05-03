@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import List, Optional
 
 from obsrv.tree_components.base_components.address_dispatcher import AddressDispatcher
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
@@ -60,6 +60,13 @@ class TreeProvider(TreeBaseProvider, AddressDispatcher):
         if names and resource_name:
             return [(resource_name, names)]
         return []
+
+    def get_publishable_config(self) -> Optional[dict]:
+        # Telescope-root provider establishes a target boundary in the
+        # publish walk. Subclasses that play a different semantic role
+        # (services: access_grantor, executor, custom_guider, ephemeris)
+        # override this to return their own role.
+        return {"role": "target", "target": self.get_source_name()}
 
     def set_tree_path(self, address_to_object: str):
         address_to_object = address_to_object + "." if address_to_object else address_to_object
