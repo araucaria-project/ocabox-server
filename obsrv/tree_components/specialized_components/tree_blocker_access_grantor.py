@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Optional
+from typing import Awaitable, Callable, ClassVar, List, Optional
 
 from obcom.data_colection.address import AddressError
 from obsrv.tree_components.base_components.tree_provider import TreeProvider
@@ -31,9 +31,24 @@ class TreeBlockerAccessGrantor(TreeProvider):
 
     COMPONENT_DEFAULT_NAME: str = 'TreeBlockerAccessGrantor'
 
+    PUSH_DRIVEN: ClassVar[bool] = True
+
     def __init__(self, component_name: str, source_name: str, target_blocker: TreeBaseRequestBlocker, **kwargs):
         super().__init__(component_name=component_name, source_name=source_name, subcontractor=None, **kwargs)
         self._target_blocker: TreeBaseRequestBlocker = target_blocker
+        self._unsubs: List[Callable[[], None]] = []
+
+    def set_change_notifier(self, notify: Callable[[], Awaitable[None]]) -> None:
+        # Drop any prior wiring (idempotent rewire).
+        for unsub in self._unsubs:
+            unsub()
+        self._unsubs = []
+        super().set_change_notifier(notify)
+
+        async def _on_change(_v: bool) -> None:
+            await notify()
+
+        self._unsubs.append(self._target_blocker.subscribe_safety_cutoff_change(_on_change))
 
     async def get_value(self, request: ValueRequest, **kwargs) -> Value or None:
         user = request.user

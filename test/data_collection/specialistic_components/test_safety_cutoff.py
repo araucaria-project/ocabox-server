@@ -125,8 +125,11 @@ class SafetyCutoffTest(unittest.IsolatedAsyncioTestCase):
         result = await self.broker.get_response(request=req)
         self.assertEqual(result.error.code, 1005)
 
-    def test_engage_disengage_state(self):
+    async def test_engage_disengage_state(self):
         """Engage and disengage toggle the state correctly."""
+        # Async because ``engage_safety_cutoff`` now mutates an Observable,
+        # which schedules its fire via ``asyncio.get_running_loop().call_soon``
+        # — that requires a running loop.
         self.assertFalse(self.blocker.is_safety_cutoff_engaged())
         self.blocker.engage_safety_cutoff()
         self.assertTrue(self.blocker.is_safety_cutoff_engaged())

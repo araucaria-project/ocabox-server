@@ -5,11 +5,12 @@ import functools
 import logging
 import param
 import time as time_module
-from typing import Optional
+from typing import Awaitable, Callable, ClassVar, Optional
 from astropy.coordinates import EarthLocation, get_moon, get_sun, AltAz, SkyCoord
 from astropy.time import Time
 from obcom.data_colection.address import AddressError
 from obsrv.tree_components.base_components.tree_provider import TreeProvider
+from obsrv.utils.observable import Observable
 from obsrv.utils.ocaboxtask import OcaboxTask
 from obcom.data_colection.value import Value
 from obcom.data_colection.value_call import ValueRequest
@@ -91,16 +92,38 @@ class TreeEphemeris(TreeProvider):
     in various timescales.
     """
 
+    PUSH_DRIVEN: ClassVar[bool] = True
+
     def __init__(self, component_name: str, source_name: str, **kwargs):
         self.data = EphemerisData()
         # self.data.run()
-        self.data.param.watch(self.on_utc_changed, 'utc')
+        # ``utc`` is observed through param (legacy descriptor system on EphemerisData)
+        # and bridged into an Observable so cycle-query subscribers can be woken
+        # within an event-loop tick of an utc tick rather than within t_tolerance.
+        initial_utc: float = self.data.utc if self.data.utc is not None else 0.0
+        self._utc: Observable[float] = Observable(initial_utc)
+        self.data.param.watch(self._sync_utc_to_observable, 'utc')
+        self._utc_unsub: Optional[Callable[[], None]] = None
         super().__init__(component_name=component_name, source_name=source_name, subcontractor=None, **kwargs)
         logger.info(f'Created {self}')
 
-    async def on_utc_changed(self, event: param.Event):
-        logger.debug(f'UTC changed to {self.data.utc}')
-        # TODO: send notification to subscribers, or update cache value?
+    def _sync_utc_to_observable(self, event: param.Event) -> None:
+        # param.watch fires synchronously on assignment; bridge to the
+        # asyncio-friendly Observable so registered watchers run on a
+        # running loop rather than at param's call site.
+        if event.new is None:
+            return
+        self._utc.set(event.new)
+
+    def set_change_notifier(self, notify: Callable[[], Awaitable[None]]) -> None:
+        if self._utc_unsub is not None:
+            self._utc_unsub()
+        super().set_change_notifier(notify)
+
+        async def _on_utc_change(_v: float) -> None:
+            await notify()
+
+        self._utc_unsub = self._utc.subscribe(_on_utc_change)
 
     async def get_value(self, request: ValueRequest, **kwargs) -> Value or None:
         user = request.user
