@@ -6,6 +6,8 @@ settings:
     get_command: 10.0
     set_command: 120.0
     pool_get: 5.0
+  focuser:
+    multiplier: 1000.0
 
 components:
   focuser:
@@ -15,6 +17,7 @@ components:
       ismoving: "POINTING.SETUP.FOCUS.ISMOVING"
       fansstatus: "AUXILIARY.FANS.STATUS"
       halt: "POINTING.SETUP.FOCUS.HALT"
+      tracking: "POINITNG.TRACK"
     actions:
       fansturnon:
         - variable: "fansstatus"
@@ -25,9 +28,12 @@ components:
       move:
         - variable: "position"
           value: "{Position}"
+        - variable: "tracking"
+          value: 4
 
   telescope: # 'telescope' jest używane jako standardowa nazwa dla komponentu 'mount'
-    reading:
+#    reading:
+    mappings:
       rightascension: "OBJECT.EQUATORIAL.RA"
       declination: "OBJECT.EQUATORIAL.DEC"
       azimuth: "OBJECT.INSTRUMENTAL.AZ"
@@ -42,25 +48,61 @@ components:
       sideofpier: "POINTING.STATE.SIDEOFPIER"
     actions:
       slewtocoordinates:
+        - variable: "epoch"
+          value: 2000.0
+        - variable: "equinox"
+          value: 2000.0
         - variable: "rightascension"
           value: "{RightAscension}"
         - variable: "declination"
           value: "{Declination}"
+        - tracking: "tracking"
+          value: 2
+        - verify:
+            rightascension: "{RightAscension}"
+            declination: "{Declination}"
+            tolerance: 0.05
+            timeout: 120
       slewtocoordinatesasync:
+        - variable: "epoch"
+          value: 2000.0
+        - variable: "equinox"
+          value: 2000.0
         - variable: "rightascension"
           value: "{RightAscension}"
         - variable: "declination"
           value: "{Declination}"
+        - tracking: "tracking"
+          value: 2
+        - verify:
+            rightascension: "{RightAscension}"
+            declination: "{Declination}"
+            tolerance: 0.05
+            timeout: 120
       slewtoaltaz:
         - variable: "azimuth"
           value: "{Azimuth}"
         - variable: "altitude"
           value: "{Altitude}"
+        - variable: "tracking"
+          value: 2
+        - verify:
+            azimuth: "{Azimuth}"
+            altitude: "{Altitude}"
+            tolerance: 0.05
+            timeout: 120
       slewtoaltazasync:
         - variable: "azimuth"
           value: "{Azimuth}"
         - variable: "altitude"
           value: "{Altitude}"
+        - variable: "tracking"
+          value: 2
+        - verify:
+            azimuth: "{Azimuth}"
+            altitude: "{Altitude}"
+            tolerance: 0.05
+            timeout: 120
       abortslew:
         - variable: "slewing"
           value: "ABORT"
@@ -108,16 +150,17 @@ components:
 
   covercalibratior:
     mappings:
-      coverstate:
+      coverstate: "AUXILIARY.COVER.REALPOS"
+      covermove: "AUXILIARY.COVER.TARGETPOS"
       calibratorstate:
       brightness:
     actions:
       opencover:
-        - variable: "coverstate"
-          value: "OPEN"
+        - variable: "covermove"
+          value: "1"
       closecover:
-        - variable: "coverstate"
-          value: "CLOSED"
+        - variable: "covermove"
+          value: "0"
       calibratoron:
         - variable: "brightness"
           value: "{Brightness}"
