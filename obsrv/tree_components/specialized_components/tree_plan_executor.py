@@ -36,7 +36,8 @@ class TreePlanExecutor(TreeProvider):
         if command == 'method2':
             timeout_control = "response string"
             return Value(v=timeout_control, ts=time.time())
-        raise AddressError(code=1002, message=f'Unrecognised method for module {self.get_name()}')
+        raise AddressError(code=1002, message=f'Unrecognised method for module {self.get_name()}',
+                           severity=AddressError.SEVERITY_CRITICAL)
 
     def get_publishable_config(self) -> Optional[dict]:
         source_name = self.get_source_name()

@@ -83,8 +83,8 @@ data_collection:
     min_time_of_data_tolerance: 0.2 # !!! Never set to 0 or less
   TreeCache:
     no_cachable_regex:
+      # is_access is per-user (answers "does THIS user own the blocker?"); a shared cache would lie.
       - .*\.is_access$
-      - .*\.safety_cutoff_state$
   TreeCCTV:   # Ubiquity CCTV camera
     udm_camera_id: ''
     udm_host: ''
