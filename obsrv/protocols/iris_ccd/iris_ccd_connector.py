@@ -133,6 +133,7 @@ class IrisCcdConnector(Connector):
             raise TreeStructureError(
                 code=3002,
                 message=f"Method {variable!r} is not implemented on {component.kind}",
+                severity=TreeStructureError.SEVERITY_CRITICAL,
             ) from None
 
         try:
@@ -141,6 +142,7 @@ class IrisCcdConnector(Connector):
                 raise TreeStructureError(
                     code=3002,
                     message=f"Malformed command definition for {variable!r} on {component.kind}: missing 'command' key",
+                    severity=TreeStructureError.SEVERITY_CRITICAL,
                 )
             get_arg = command_def.get('get_arg')
             if get_arg:
@@ -186,6 +188,7 @@ class IrisCcdConnector(Connector):
             raise TreeStructureError(
                 code=3002,
                 message=f"Method {variable!r} is not implemented on {component.kind}",
+                severity=TreeStructureError.SEVERITY_CRITICAL,
             ) from None
 
         try:
@@ -194,6 +197,7 @@ class IrisCcdConnector(Connector):
                 raise TreeStructureError(
                     code=3002,
                     message=f"Malformed command definition for {variable!r} on {component.kind}: missing 'command' key",
+                    severity=TreeStructureError.SEVERITY_CRITICAL,
                 )
             if not data:
                 return {"status": "failed", "error": "Missing input value."}

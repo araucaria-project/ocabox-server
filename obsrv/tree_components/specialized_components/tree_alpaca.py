@@ -101,7 +101,8 @@ class TreeAlpacaObservatory(TreeBaseProvider):
             return Value(result, time.time())
             
         except KeyError:
-            raise AddressError(address=address, code=1002, message="Observatory component not found")
+            raise AddressError(address=address, code=1002, message="Observatory component not found",
+                               severity=AddressError.SEVERITY_CRITICAL)
         except BaseCodedError:
             raise
         except Exception as e:

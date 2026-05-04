@@ -118,7 +118,8 @@ class TreeEphemeris(TreeProvider):
         if command == 'method2':
             timeout_control = "response string"
             return Value(v=timeout_control, ts=time_module.time())
-        raise AddressError(code=1002, message=f'Unrecognised method for module {self.get_name()}')
+        raise AddressError(code=1002, message=f'Unrecognised method for module {self.get_name()}',
+                           severity=AddressError.SEVERITY_CRITICAL)
 
     async def run(self):
         await self.data.run()

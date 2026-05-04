@@ -303,6 +303,7 @@ class PilarConnector(Connector):
             raise TreeStructureError(
                 code=3002,
                 message=f"Method {variable!r} is not implemented on {component.kind}",
+                severity=TreeStructureError.SEVERITY_CRITICAL,
             ) from None
 
         try:
@@ -347,6 +348,7 @@ class PilarConnector(Connector):
             raise TreeStructureError(
                 code=3002,
                 message=f"Method {variable!r} is not implemented on {component.kind}",
+                severity=TreeStructureError.SEVERITY_CRITICAL,
             ) from None
 
         try:

@@ -74,7 +74,8 @@ class TreeConditionalFreezer(TreeBaseProvider):
         # check request is cachable
         if not self._subcontractor.is_cachable_request(request=request):
             logger.info(f'Retrieve a cycle query for a non-cacheable value {request.address}')
-            raise TreeOtherError(code=4003)
+            # Permanent under current server config — no_cachable_regex is config, not state.
+            raise TreeOtherError(code=4003, severity=ResponseError.SEVERITY_CRITICAL)
 
         time_of_known_change = request.request_data.get('time_of_known_change', None)
         t_tolerance = request.time_of_data_tolerance

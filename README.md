@@ -53,6 +53,8 @@ research. Initially, the project was to mediate in the exchange of data between 
 the astronomical telescope. At the same time, by using caching in the program, it was supposed to relieve the server
 managing the telescope.
 
+The error model — `ResponseError`, severity levels, code registry, and per-connector contracts — is documented in [`doc/errors.md`](doc/errors.md).
+
 ## Installation
 
 ### Install with poetry
