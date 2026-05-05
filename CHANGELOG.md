@@ -3,6 +3,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.3.15]
+### Fixed
+- `IrisCcdConnector` no longer swallows transient TCP failures (`ConnectionError`, `BrokenPipeError`, `OSError`, `asyncio.TimeoutError`, `TimeoutError`) and returns `None` / `{"status": "failed"}`. The swallow caused cycle-query subscribers to escalate to `TreeValueError(2003, CRITICAL)` after retries, terminating PMS subscriptions permanently on transient device outages with no auto-recovery (issue #20). Transient IO now raises `TreeOtherError(4005, NORMAL)`; device-replied errors (`RuntimeError`) raise `TreeValueError(2002, NORMAL)`. Applied symmetrically to `get`, `put`, and `call`.
+### Changed
+- `PilarConnector` aligns with the new convention: `_TEMPORARY_IO_ERRORS` raise `TreeOtherError(4005, NORMAL)` instead of `TEMPORARY`. NORMAL surfaces sustained device-offline state to the operator (throttled logging via `ErrorPolicy.SERVICE`); TEMPORARY would silently retry inside the cycle-query layer for arbitrarily long outages. Single-poll blips are still absorbed by the pool's self-heal logic below the raise site.
+- `doc/errors.md` — added "TEMPORARY vs NORMAL — blip vs sustained" subsection clarifying the convention. Updated the per-connector contract paragraph and the example table.
+- `tree_conditional_freezer.py` — comment at the `2003` raise documenting that `severity=None` resolves to `NORMAL` via the `ResponseError` constructor (the freezer's fallback when no connector error supplied a severity).
+
 ## [2.3.13]
 ### Added
 - `AlpacaConnector` translates Andor `DRV_ACQUIRING (20072)` to `TreeOtherError(code=4008, severity=TEMPORARY)` so clients can react to "device busy" without string-matching the wrapped error message. `AlpacaError` now retains `error_number` as an attribute.
