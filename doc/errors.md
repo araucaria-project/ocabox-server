@@ -54,12 +54,25 @@ Examples:
 
 | Situation                                                            | Severity     | Why                                                                       |
 |----------------------------------------------------------------------|--------------|---------------------------------------------------------------------------|
-| Pilar TCP connection refused, briefly unreachable                    | `TEMPORARY`  | Connector self-heals; cycle-query retries silently.                       |
+| Single missed poll inside a connector's self-heal window             | `TEMPORARY`  | Connector self-heals; cycle-query retries silently within one cycle.      |
+| TCP `ECONNREFUSED` against an instrument (Pilar/IRIS-CCD)            | `NORMAL`     | Sustained device-offline state; SERVICE preset retries with throttled logging until the device returns. |
 | ALPACA driver returns `0x40C NotImplemented`                         | `NORMAL`     | External, may change if hardware/driver is reconfigured. (Legacy choice.) |
 | Method missing from Pilar/IRIS-CCD command map (`KeyError` path)     | `CRITICAL`   | Address-space mismatch — won't change without a server reconfig.          |
 | `no_cachable_regex` excludes the address (`TreeOtherError(4003)`)    | `CRITICAL`   | Configuration, not state — the same address will always be rejected.      |
 | Component address doesn't exist in the tree (`AddressError(1002)`)   | `CRITICAL`   | Address space is fixed by component schema.                               |
 | Internal request bookkeeping error (e.g. malformed retry counter)    | `CRITICAL`   | TIC bug; abort fast.                                                      |
+
+### TEMPORARY vs NORMAL — blip vs sustained
+
+Both severities describe transient failures, but they differ in **who handles the retry** and **whether the operator sees it**.
+
+- **`TEMPORARY`** — handled inside `ConditionalCycleQuery._send_message` as a silent retry within the cycle. The user callback never fires. Right for *blips* — a single dropped poll, a stale connection that the connector self-heals on the next attempt, a brief timeout while the connector pool reconnects. The operator gets no signal because there is nothing actionable.
+
+- **`NORMAL`** — surfaces to the client. Under `ErrorPolicy.SERVICE` (PMS-style daemons), the client retries with staged backoff (2s × 3 → 10s × 6 → 60s forever) and emits throttled error logs (3 loud + 1/hour). Under `ErrorPolicy.INTERACTIVE`, the client stops and reports. Right for *sustained external-state failures* — device powered off for hours/days/weeks, network partition, instrument in a fault state requiring intervention. The operator should know the source is unreachable for that long.
+
+`ECONNREFUSED` on a TCP connect is unambiguously **sustained**, not a blip — TCP would return a timeout for a single dropped packet, and a refused-connection means no listener at the address. So instrument connectors raise `TreeOtherError(4005, severity=NORMAL)` for `(ConnectionError, BrokenPipeError, OSError, asyncio.TimeoutError, TimeoutError)`. The connector's pool / circuit-breaker logic (when present, e.g. Pilar) absorbs single-blip cases below the raise site, so by the time `_TEMPORARY_IO_ERRORS` fires the device really is offline-for-now and the operator should see it.
+
+Reserve `TEMPORARY` for cases where the connector itself can confidently say "this is a one-off, the next poll will succeed."
 
 ### Convention history
 
@@ -115,7 +128,7 @@ All connectors live under `obsrv/protocols/`. They inherit a base `Connector` wi
 | Pilar     | `obsrv/protocols/pilar/pilar_connector.py`    | `KeyError` on command-map lookup → `TreeStructureError(3002, CRITICAL)`.     |
 | IRIS-CCD  | `obsrv/protocols/iris_ccd/iris_ccd_connector.py` | Same: `KeyError` → `TreeStructureError(3002, CRITICAL)`. Malformed entries (missing `command` key) also `3002 CRITICAL`. |
 
-For transient connectivity loss, connectors should classify socket-level failures as `SEVERITY_TEMPORARY` (e.g. `_TEMPORARY_IO_ERRORS` in `pilar_connector.py`) so the cycle-query layer retries them silently.
+For sustained connectivity loss (TCP refused, broken pipe, OS-level socket errors), connectors raise `TreeOtherError(4005, NORMAL)` against the `_TEMPORARY_IO_ERRORS` set so cycle-query subscribers self-recover via the client's `ErrorPolicy.SERVICE` retries when the device returns. For genuine single-poll blips that the connector can absorb internally, `SEVERITY_TEMPORARY` is appropriate — see "TEMPORARY vs NORMAL" above. Connectors must **not** swallow `_TEMPORARY_IO_ERRORS` and return `None`/`{}`: the freezer cannot distinguish that from a successful null read and the operator gets no signal.
 
 ## Client behaviour — `ConditionalCycleQuery`
 

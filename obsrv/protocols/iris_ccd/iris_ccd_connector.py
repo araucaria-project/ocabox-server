@@ -5,11 +5,23 @@ from typing import Iterable, Callable, Tuple, Dict
 import confuse
 
 from obsrv.protocols.alpaca.alpaca_connector import Connector
-from obcom.data_colection.coded_error import TreeStructureError
+from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
+from obcom.data_colection.value import TreeValueError
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'iris_ccd_config.yml')
+
+# Socket-level failures that indicate the device is unreachable.
+# Surfaced as TreeOtherError(4005, NORMAL) so cycle-query subscribers
+# self-recover via ErrorPolicy.SERVICE staged-backoff retries when the
+# device returns. NORMAL (not TEMPORARY) because ECONNREFUSED on TCP
+# is a sustained device-offline state, not a single missed-poll blip
+# — the operator should have visibility into a multi-day outage, and
+# SERVICE preset's throttled logging gives that without the silent
+# retry-forever pathology.
+_TEMPORARY_IO_ERRORS = (ConnectionError, BrokenPipeError, OSError,
+                        asyncio.TimeoutError, TimeoutError)
 
 class IrisCcdProtocol(asyncio.DatagramProtocol):
     def __init__(self, response_future: asyncio.Future):
@@ -172,10 +184,21 @@ class IrisCcdConnector(Connector):
             
             # 3. Zwracamy odpowiedź (jeśli to nie jest camerastate, zwróci tekst)
             return raw_response
-            
-        except (TimeoutError, ConnectionError, RuntimeError) as e:
-            logger.error(f"IRIS CCD GET failed for {component.kind}.{variable}: {e}")
-            return None
+
+        except _TEMPORARY_IO_ERRORS as e:
+            # Device unreachable — sustained external state. Surface as
+            # 4005 NORMAL so cycle-query subscribers self-recover via
+            # ErrorPolicy.SERVICE retries when the device returns.
+            raise TreeOtherError(address=None, code=4005,
+                                 message=f"IRIS CCD unreachable on GET {component.kind}.{variable}: {e}",
+                                 severity=TreeOtherError.SEVERITY_NORMAL) from e
+        except RuntimeError as e:
+            # Device replied with a non-OKAY response (raised in _execute_command).
+            # Real instrument-state error — surface as 2002 NORMAL so the client
+            # sees it but can still retry per its ErrorPolicy.
+            raise TreeValueError(address=None, code=2002,
+                                 message=f"IRIS CCD device error on GET {component.kind}.{variable}: {e}",
+                                 severity=TreeValueError.SEVERITY_NORMAL) from e
 
     async def put(self, component: 'Component', variable: str, kind=None, **data):
         address = component.get_option_recursive('address')
@@ -205,9 +228,14 @@ class IrisCcdConnector(Connector):
             command = f"{command_base} {value}"
             response = await self._execute_command(address, command)
             return {"status": "ok", "response": response}
-        except (TimeoutError, ConnectionError, RuntimeError) as e:
-            logger.error(f"IRIS CCD PUT failed for {component.kind}.{variable}: {e}")
-            return {"status": "failed", "error": str(e)}
+        except _TEMPORARY_IO_ERRORS as e:
+            raise TreeOtherError(address=None, code=4005,
+                                 message=f"IRIS CCD unreachable on PUT {component.kind}.{variable}: {e}",
+                                 severity=TreeOtherError.SEVERITY_NORMAL) from e
+        except RuntimeError as e:
+            raise TreeValueError(address=None, code=2002,
+                                 message=f"IRIS CCD device error on PUT {component.kind}.{variable}: {e}",
+                                 severity=TreeValueError.SEVERITY_NORMAL) from e
 
     async def call(self, component: 'Component', function: str, **data):
         address = component.get_option_recursive('address')
@@ -237,9 +265,14 @@ class IrisCcdConnector(Connector):
                 
                 last_response = await self._execute_command(address, command)
             return {"status": f"action_{function}_completed", "response": last_response}
-        except Exception as e:
-            logger.error(f"IRIS CCD CALL failed for action {function}: {e}")
-            return {"status": "failed", "error": str(e)}
+        except _TEMPORARY_IO_ERRORS as e:
+            raise TreeOtherError(address=None, code=4005,
+                                 message=f"IRIS CCD unreachable on CALL {function}: {e}",
+                                 severity=TreeOtherError.SEVERITY_NORMAL) from e
+        except RuntimeError as e:
+            raise TreeValueError(address=None, code=2002,
+                                 message=f"IRIS CCD device error on CALL {function}: {e}",
+                                 severity=TreeValueError.SEVERITY_NORMAL) from e
 
     async def subscribe(self, variables: Iterable[Tuple[str, str]], callback: Callable):
         pass
