@@ -91,6 +91,22 @@ class IrisCcdConnector(Connector):
                 logger.error(f"Failed to connect UDP to {address}: {e}")
                 raise
 
+    def _drop_endpoint(self, address: str) -> None:
+        """Remove a cached UDP endpoint and close its transport.
+
+        The transport owns the underlying socket FD; dropping the cache entry
+        without closing it orphans the socket (asyncio keeps it registered with
+        the event loop), leaking one FD per timeout/reconnect. With the device
+        unreachable that leaks continuously until RLIMIT_NOFILE is exhausted.
+        """
+        entry = self._endpoints.pop(address, None)
+        if entry is not None:
+            transport, _protocol = entry
+            try:
+                transport.close()
+            except Exception:
+                pass
+
     async def _execute_command(self, address: str, command_str: str) -> str:
         # Get endpoint first to ensure locks are created
         transport, protocol = await self._get_endpoint(address)
@@ -98,8 +114,8 @@ class IrisCcdConnector(Connector):
         # Lock per address to ensure sequential request-response on the same socket
         async with self._locks[address]:
             if not transport or transport.is_closing():
-                 # Reconnect logic if needed, simplistically removing from cache
-                 if address in self._endpoints: del self._endpoints[address]
+                 # Reconnect logic: close + drop the stale endpoint before recreating
+                 self._drop_endpoint(address)
                  transport, protocol = await self._get_endpoint(address)
 
             try:
@@ -126,8 +142,9 @@ class IrisCcdConnector(Connector):
 
             except asyncio.TimeoutError:
                 logger.error(f"IRIS CCD command '{command_str}' timed out.")
-                # Force reconnect on timeout to be safe
-                if address in self._endpoints: del self._endpoints[address]
+                # Force reconnect on timeout to be safe — close the transport so the
+                # UDP socket FD is released, not just dropped from the cache.
+                self._drop_endpoint(address)
                 raise TimeoutError("IRIS CCD did not respond in time.")
             except Exception as e:
                 logger.error(f"Error during IRIS CCD command: {e}")

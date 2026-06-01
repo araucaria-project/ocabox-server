@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 ## [2.3.16]
 ### Fixed
 - `AlpacaConnector` now uses a single long-lived `aiohttp.ClientSession` per connector (created lazily on first request) instead of opening a fresh session + TCP connection per request. The old behaviour issued a fresh `getaddrinfo` on every poll (~150 DNS queries/s in production, all cache-missing), so a brief upstream-DNS hiccup saturated the resolver thread-pool with uncancellable lookups and the process never recovered without a restart (Phenomenon A — "loses all ALPACA hosts ~hourly, curl still works"). Keep-alive + a connector-level DNS cache (`ttl_dns_cache=30s`) collapse that storm.
+- `IrisCcdConnector` no longer leaks a UDP socket per timed-out command. `_execute_command` dropped the cached endpoint with `del self._endpoints[address]` on timeout/reconnect without closing the transport, orphaning the socket FD; with the device unreachable this leaked ~4 FDs/min until `RLIMIT_NOFILE` (1024) was exhausted. The leak was previously masked by the hourly Phenomenon-A restarts and surfaced once the ALPACA fix above let the process run stably. New `_drop_endpoint()` helper closes the transport before dropping it.
 ### Changed
 - `AlpacaConnector` session uses `ClientTimeout(total=10s, connect=5s, sock_connect=5s)` (aiohttp default is 5 min) and `TCPConnector(limit_per_host=8)`. The per-host cap also keeps the ASCOM driver queue shallow, mitigating the `code=1026` filterwheel queue-depth timeouts (Phenomenon B).
 ### Dependencies
