@@ -3,6 +3,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.3.16]
+### Fixed
+- `AlpacaConnector` now uses a single long-lived `aiohttp.ClientSession` per connector (created lazily on first request) instead of opening a fresh session + TCP connection per request. The old behaviour issued a fresh `getaddrinfo` on every poll (~150 DNS queries/s in production, all cache-missing), so a brief upstream-DNS hiccup saturated the resolver thread-pool with uncancellable lookups and the process never recovered without a restart (Phenomenon A — "loses all ALPACA hosts ~hourly, curl still works"). Keep-alive + a connector-level DNS cache (`ttl_dns_cache=30s`) collapse that storm.
+### Changed
+- `AlpacaConnector` session uses `ClientTimeout(total=10s, connect=5s, sock_connect=5s)` (aiohttp default is 5 min) and `TCPConnector(limit_per_host=8)`. The per-host cap also keeps the ASCOM driver queue shallow, mitigating the `code=1026` filterwheel queue-depth timeouts (Phenomenon B).
+### Dependencies
+- Added `aiodns` so aiohttp's `DefaultResolver` is the async (c-ares) resolver, which runs DNS on the event loop instead of the blocking `getaddrinfo` thread-pool.
+
 ## [2.3.15]
 ### Fixed
 - `IrisCcdConnector` no longer swallows transient TCP failures (`ConnectionError`, `BrokenPipeError`, `OSError`, `asyncio.TimeoutError`, `TimeoutError`) and returns `None` / `{"status": "failed"}`. The swallow caused cycle-query subscribers to escalate to `TreeValueError(2003, CRITICAL)` after retries, terminating PMS subscriptions permanently on transient device outages with no auto-recovery (issue #20). Transient IO now raises `TreeOtherError(4005, NORMAL)`; device-replied errors (`RuntimeError`) raise `TreeValueError(2002, NORMAL)`. Applied symmetrically to `get`, `put`, and `call`.
