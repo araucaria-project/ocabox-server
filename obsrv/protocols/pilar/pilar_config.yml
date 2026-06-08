@@ -42,10 +42,9 @@ components:
       atpark: "POINTING.STATE.ATPARK"
       slewing: "POINTING.STATE.SLEWING"
       tracking: "POINTING.TRACK"
-      ispulseguiding: "POINTING.STATE.PULSEGUIDING"
       motorstatus: "MOTORS.STATUS"
-      errorstring: "SYSTEM.ERROR.STRING"
-      sideofpier: "POINTING.STATE.SIDEOFPIER"
+#      errorstring: "SYSTEM.ERROR.STRING"
+#      sideofpier: "POINTING.STATE.SIDEOFPIER"
     actions:
       slewtocoordinates:
         - variable: "epoch"
@@ -103,6 +102,9 @@ components:
             altitude: "{Altitude}"
             tolerance: 0.05
             timeout: 120
+      tracking:
+        - variable: "tracking"
+          value: "1"
       abortslew:
         - variable: "slewing"
           value: "ABORT"
@@ -121,9 +123,6 @@ components:
       motoroff:
         - variable: "motorstatus"
           value: "OFF"
-      pulseguide:
-        - variable: "ispulseguiding"
-          value: "{Direction},{Duration}"
 
   rotator:
     reading:
