@@ -14,7 +14,13 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'pilar_config.yml')
 
 # Socket-level failures that indicate the Pilar link is down / stale.
-# These are classified as SEVERITY_TEMPORARY so TreeConditionalFreezer can suppress them.
+# Surfaced as TreeOtherError(4005, NORMAL) so cycle-query subscribers
+# self-recover via ErrorPolicy.SERVICE staged-backoff retries when the
+# device returns. NORMAL (not TEMPORARY) for the same reason iris_ccd
+# uses NORMAL — sustained device-offline state needs operator visibility,
+# not a silent retry-forever inside the cycle-query layer. The pool's
+# self-heal logic already filters single-blip cases before they reach
+# this raise site.
 _TEMPORARY_IO_ERRORS = (ConnectionError, BrokenPipeError, OSError, asyncio.TimeoutError, TimeoutError)
 
 
@@ -252,7 +258,8 @@ class PilarConnector(Connector):
         if not connected:
             # Either breaker is open or this attempt just failed. Surface as a
             # connection-class error so the caller's `_TEMPORARY_IO_ERRORS`
-            # branch translates it to SEVERITY_TEMPORARY without an ERROR log.
+            # branch translates it to TreeOtherError(4005, NORMAL) without
+            # an ERROR log here.
             raise ConnectionError(f"Pilar at {address} not reachable")
         try:
             id_pool = self._id_pools[address]
@@ -303,6 +310,7 @@ class PilarConnector(Connector):
             raise TreeStructureError(
                 code=3002,
                 message=f"Method {variable!r} is not implemented on {component.kind}",
+                severity=TreeStructureError.SEVERITY_CRITICAL,
             ) from None
 
         try:
@@ -326,7 +334,7 @@ class PilarConnector(Connector):
                 logger.warning(f"Pilar not responding at {address} ({component.kind}.{variable}): {e}")
             raise TreeOtherError(address=None, code=4005,
                                  message=f"Pilar not responding at {address}",
-                                 severity=TreeOtherError.SEVERITY_TEMPORARY) from e
+                                 severity=TreeOtherError.SEVERITY_NORMAL) from e
         except Exception as e:
             logger.error(f"Pilar GET failed for {component.kind}.{variable} at {address}: {e}")
             raise
@@ -347,6 +355,7 @@ class PilarConnector(Connector):
             raise TreeStructureError(
                 code=3002,
                 message=f"Method {variable!r} is not implemented on {component.kind}",
+                severity=TreeStructureError.SEVERITY_CRITICAL,
             ) from None
 
         try:
@@ -385,7 +394,7 @@ class PilarConnector(Connector):
                 logger.warning(f"Pilar not responding at {address} ({component.kind}.{variable}): {e}")
             raise TreeOtherError(address=None, code=4005,
                                  message=f"Pilar not responding at {address}",
-                                 severity=TreeOtherError.SEVERITY_TEMPORARY) from e
+                                 severity=TreeOtherError.SEVERITY_NORMAL) from e
         except Exception as e:
             logger.error(f"Pilar PUT failed for {component.kind}.{variable}: {e}")
             return {"status": "failed", "error": str(e)}
