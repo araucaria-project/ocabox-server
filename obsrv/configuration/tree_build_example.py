@@ -12,6 +12,7 @@ from obsrv.tree_components.specialized_components import TreeCustomGuiderHandler
 from obsrv.tree_components.specialized_components import TreeEphemeris
 from obsrv.tree_components.specialized_components.tree_plan_executor import TreePlanExecutor
 from obsrv.ob_config import SingletonConfig
+from obsrv.utils.push_wiring import assert_push_wiring
 
 
 def tree_build() -> Router:
@@ -36,6 +37,7 @@ def tree_build() -> Router:
     cache_global = TreeCache('cache-global', broker_components_global)
     conditional_freezer_global = TreeConditionalFreezer('conditional-freezer-global', cache_global)
     target_provider_global = TreeProvider('target-provider-global', 'global', conditional_freezer_global)
+    ephemeris.set_change_notifier(cache_global._report_new_value)
 
     # --------------------------------------- sim ---------------------------------------
     alpaca_sim = TreeAlpacaObservatory('alpaca-sim', observatory_name='sim')
@@ -48,6 +50,7 @@ def tree_build() -> Router:
     cache_sim = TreeCache('cache-sim', broker_components_sim)
     conditional_freezer_sim = TreeConditionalFreezer('conditional-freezer-sim', cache_sim)
     target_provider_sim = TreeProvider('target-provider-sim', 'sim', conditional_freezer_sim)
+    blocker_grantor_sim.set_change_notifier(cache_sim._report_new_value)
 
     # --------------------------------------- dev ---------------------------------------
     alpaca_dev = TreeAlpacaObservatory('alpaca-dev', observatory_name='dev')
@@ -61,6 +64,7 @@ def tree_build() -> Router:
     cache_dev = TreeCache('cache-dev', broker_components_dev)
     conditional_freezer_dev = TreeConditionalFreezer('conditional-freezer-dev', cache_dev)
     target_provider_dev = TreeProvider('target-provider-dev', 'dev', conditional_freezer_dev)
+    blocker_grantor_dev.set_change_notifier(cache_dev._report_new_value)
 
     # --------------------------------------- dummytest ---------------------------------------
     alpaca_dummytest = TreeAlpacaObservatory('alpaca-dummytest', observatory_name='dummytest')
@@ -73,6 +77,7 @@ def tree_build() -> Router:
     cache_dummytest = TreeCache('cache-dummytest', broker_components_dummytest)
     conditional_freezer_dummytest = TreeConditionalFreezer('conditional-freezer-dummytest', cache_dummytest)
     target_provider_dummytest = TreeProvider('target-provider-dummytest', 'dummytest', conditional_freezer_dummytest)
+    blocker_grantor_dummytest.set_change_notifier(cache_dummytest._report_new_value)
 
 
     # -----------------------------gather alpacas components -----------------------------
@@ -82,6 +87,11 @@ def tree_build() -> Router:
                                        target_provider_dummytest,
                                        target_provider_global
     ])
+
+    # Fail-fast: every PUSH_DRIVEN provider above must have had
+    # ``set_change_notifier`` called during assembly. A new provider
+    # added later without wiring is caught at server start.
+    assert_push_wiring(broker_front_oca)
 
     # ------------------------------ front receiver blocks -------------------------------
     rs = RequestSolver(data_provider=broker_front_oca)
