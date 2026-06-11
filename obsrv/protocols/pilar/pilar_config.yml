@@ -38,14 +38,16 @@ components:
       declination: "OBJECT.EQUATORIAL.DEC"
       azimuth: "OBJECT.INSTRUMENTAL.AZ"
       altitude: "OBJECT.INSTRUMENTAL.ALT"
-      athome: "POINTING.STATE.ATHOME"
-      atpark: "POINTING.STATE.ATPARK"
-      slewing: "POINTING.STATE.SLEWING"
+      athome: "TELESCOPE.READY_STATE"
+      atpark: "TELESCOPE.READY_STATE"
+      slewing: "TELESCOPE.MOTION_STATE"
       tracking: "POINTING.TRACK"
-      ispulseguiding: "POINTING.STATE.PULSEGUIDING"
-      motorstatus: "MOTORS.STATUS"
-      errorstring: "SYSTEM.ERROR.STRING"
-      sideofpier: "POINTING.STATE.SIDEOFPIER"
+      motorstatus: "CABINET.POWER"
+      abortslew: "TELESCOPE.STOP"
+      park: "TELESCOPE.READY"
+      motor: "CABINET.POWER"
+#      errorstring: "SYSTEM.ERROR.STRING"
+#      sideofpier: "POINTING.STATE.SIDEOFPIER"
     actions:
       slewtocoordinates:
         - variable: "epoch"
@@ -103,27 +105,27 @@ components:
             altitude: "{Altitude}"
             tolerance: 0.05
             timeout: 120
+      tracking:
+        - variable: "tracking"
+          value: "{Tracking}"
       abortslew:
-        - variable: "slewing"
-          value: "ABORT"
+        - variable: "abortslew"
+          value: 0
       park:
-        - variable: "atpark"
-          value: "PARK"
+        - variable: "park"
+          value: 0
       unpark:
-        - variable: "atpark"
-          value: "UNPARK"
+        - variable: "park"
+          value: 1
       findhome:
-        - variable: "athome"
-          value: "FINDHOME"
+        - variable: "park"
+          value: 1
       motoron:
-        - variable: "motorstatus"
-          value: "ON"
+        - variable: "motor"
+          value: 1
       motoroff:
-        - variable: "motorstatus"
-          value: "OFF"
-      pulseguide:
-        - variable: "ispulseguiding"
-          value: "{Direction},{Duration}"
+        - variable: "motor"
+          value: 0
 
   rotator:
     reading:
@@ -152,8 +154,8 @@ components:
     mappings:
       coverstate: "AUXILIARY.COVER.REALPOS"
       covermove: "AUXILIARY.COVER.TARGETPOS"
-      calibratorstate:
-      brightness:
+#      calibratorstate:
+#      brightness:
     actions:
       opencover:
         - variable: "covermove"
@@ -161,31 +163,14 @@ components:
       closecover:
         - variable: "covermove"
           value: "0"
-      calibratoron:
-        - variable: "brightness"
-          value: "{Brightness}"
-        - variable: "calibratorstate"
-          value: "ON"
-      calibratoroff:
-        - variable: "calibratorstate"
-          value: "OFF"
-
-### Wersja pierwsza
-#  telescope:
-#    mappings:
-#      rightascension: "OBJECT.EQUATORIAL.RA"
-#      declination: "OBJECT.EQUATORIAL.DEC"
-#      tracking: "POINTING.TRACK"
-#      azimuth: "OBJECT.INSTRUMENTAL.AZ"
-#      altitude: "OBJECT.INSTRUMENTAL.ALT"
-#    actions:
-#      slewtocoordinates:
-#        - variable: "rightascension"
-#          value: "{RightAscension}"
-#        - variable: "declination"
-#          value: "{Declination}"
-#        - variable: "tracking"
-#          value: 1
+#      calibratoron:
+#        - variable: "brightness"
+#          value: "{Brightness}"
+#        - variable: "calibratorstate"
+#          value: "ON"
+#      calibratoroff:
+#        - variable: "calibratorstate"
+#          value: "OFF"
 
 resource_locks:
   "POINTING.SETUP.FOCUS.POSITION": "FOCUSER_MOTOR"

@@ -1,8 +1,10 @@
 import asyncio
 import logging
 import os
+import json
 from typing import Iterable, Callable, Tuple, Dict
 import confuse
+import nats
 
 from obsrv.protocols.alpaca.alpaca_connector import Connector
 from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
@@ -11,14 +13,6 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'iris_ccd_config.yml')
 
-# Socket-level failures that indicate the device is unreachable.
-# Surfaced as TreeOtherError(4005, NORMAL) so cycle-query subscribers
-# self-recover via ErrorPolicy.SERVICE staged-backoff retries when the
-# device returns. NORMAL (not TEMPORARY) because ECONNREFUSED on TCP
-# is a sustained device-offline state, not a single missed-poll blip
-# — the operator should have visibility into a multi-day outage, and
-# SERVICE preset's throttled logging gives that without the silent
-# retry-forever pathology.
 _TEMPORARY_IO_ERRORS = (ConnectionError, BrokenPipeError, OSError,
                         asyncio.TimeoutError, TimeoutError)
 
@@ -47,8 +41,14 @@ class IrisCcdConnector(Connector):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._load_config()
-        self._endpoints = {} # Map: address -> (transport, protocol)
-        self._locks = {}     # Map: address -> asyncio.Lock
+        self._endpoints = {} 
+        self._locks = {}     
+        
+        self._nats_nc = None
+        self._nats_connected = False
+        self._nats_lock = asyncio.Lock()
+        self._nats_data = {}
+        
         logger.info('IrisCcdConnector created')
 
     def _load_config(self):
@@ -60,10 +60,60 @@ class IrisCcdConnector(Connector):
             self._timeout = config['settings']['command_timeout'].get(float)
             self._command_map = config['mappings']['commands'].get(dict)
             self._actions_map = config['mappings']['actions'].get(dict)
+            
+            self._nats_url = config['settings']['nats_url'].get(str)
+            self._nats_subject = config['settings']['nats_subject'].get(str)
+            self._nats_map = self._command_map.get('nats', {})
+            
             logger.info("IRIS CCD configuration loaded successfully.")
         except (confuse.ConfigReadError, FileNotFoundError) as e:
             logger.error(f"CRITICAL: Could not read IRIS CCD config file. Error: {e}")
             raise RuntimeError("IRIS CCD connector configuration is missing or corrupted.") from e
+
+    async def _nats_message_handler(self, msg):
+        try:
+            payload = json.loads(msg.data.decode('utf-8'))
+            measurements = payload.get("data", {}).get("measurements", {})
+            
+            for var_name, var_conf in self._nats_map.items():
+                expected_subject = var_conf.get('subject', self._nats_subject)
+                
+                if msg.subject == expected_subject:
+                    key = var_conf.get('key')
+                    if key and key in measurements:
+                        self._nats_data[var_name] = float(measurements[key])
+                        logger.debug(f"NATS [{msg.subject}]: Update '{var_name}' with key '{key}' -> {self._nats_data[var_name]}")
+                        
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from NATS: {e}")
+        except ValueError as e:
+            logger.error(f"Error converting NATS value to float: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error while parsing NATS telemetry: {e}")
+
+    async def _ensure_nats_connected(self):
+        async with self._nats_lock:
+            if not self._nats_connected:
+                try:
+                    self._nats_nc = await nats.connect(self._nats_url)
+                    
+                    subjects_to_subscribe = set()
+                    if self._nats_subject:
+                        subjects_to_subscribe.add(self._nats_subject)
+                    for var_conf in self._nats_map.values():
+                        sub = var_conf.get('subject', self._nats_subject)
+                        if sub:
+                            subjects_to_subscribe.add(sub)
+                    
+                    for sub in subjects_to_subscribe:
+                        await self._nats_nc.subscribe(sub, cb=self._nats_message_handler)
+                        logger.info(f"NATS: Subscribed to subject: {sub}")
+                        
+                    self._nats_connected = True
+                    logger.info(f"Successfully connected to NATS server ({self._nats_url})")
+                except Exception as e:
+                    logger.error(f"Error connecting to NATS: {e}")
+                    raise
 
     async def _get_endpoint(self, address: str):
         if address not in self._locks:
@@ -77,7 +127,6 @@ class IrisCcdConnector(Connector):
                 host, port_str = address.split(':')
                 port = int(port_str)
                 loop = asyncio.get_running_loop()
-                # Create a protocol with a dummy future initially
                 protocol = IrisCcdProtocol(asyncio.Future())
                 transport, protocol = await loop.create_datagram_endpoint(
                     lambda: protocol,
@@ -107,10 +156,8 @@ class IrisCcdConnector(Connector):
                 pass
 
     async def _execute_command(self, address: str, command_str: str) -> str:
-        # Get endpoint first to ensure locks are created
         transport, protocol = await self._get_endpoint(address)
         
-        # Lock per address to ensure sequential request-response on the same socket
         async with self._locks[address]:
             if not transport or transport.is_closing():
                  # Reconnect logic: close + drop the stale endpoint before recreating
@@ -119,7 +166,6 @@ class IrisCcdConnector(Connector):
 
             try:
                 response_future = asyncio.get_running_loop().create_future()
-                # Update future in the protocol instance
                 protocol.response_future = response_future
                 
                 command_bytes = command_str.encode('utf-8')
@@ -133,7 +179,6 @@ class IrisCcdConnector(Connector):
                 logger.debug(f"IRIS CCD IN ({address}) <<< {response}")
 
                 if "OKAY" in response:
-                    # Znajdujemy pozycję słowa OKAY i zwracamy wszystko, co po nim występuje
                     index = response.find("OKAY")
                     return response[index + 4:].strip()
                 else:
@@ -150,6 +195,21 @@ class IrisCcdConnector(Connector):
                 raise
 
     async def get(self, component: 'Component', variable: str, kind=None, **data):
+        if variable in self._nats_map:
+            try:
+                await self._ensure_nats_connected()
+            except Exception as e:
+                raise TreeOtherError(address=None, code=4005,
+                                     message=f"NATS connection failed: {e}",
+                                     severity=TreeOtherError.SEVERITY_NORMAL) from e
+                                     
+            if variable not in self._nats_data:
+                raise TreeOtherError(address=None, code=4005,
+                                     message=f"NATS telemetry received no data for {variable!r} yet.",
+                                     severity=TreeOtherError.SEVERITY_NORMAL)
+                                     
+            return self._nats_data[variable]
+
         address = component.get_option_recursive('address')
         if not address:
              logger.error(f"No address for component {component.sys_id}")
@@ -178,33 +238,20 @@ class IrisCcdConnector(Connector):
             else:
                 command = command_base
             
-            # 1. Pobieramy surowy tekst z kamery
             raw_response = await self._execute_command(address, command)
             
-            # 2. TŁUMACZENIE STANU KAMERY NA STANDARD ALPACA
             if component.kind == 'camera' and variable == 'camerastate':
                 resp_upper = raw_response.upper()
-                if "EXPOS" in resp_upper:
-                    return 2  # CameraExposing
-                elif "WAIT" in resp_upper:
-                    return 1  # CameraWaiting
-                elif "READ" in resp_upper:
-                    return 3  # CameraReading
-                elif "DOWNLOAD" in resp_upper:
-                    return 4  # CameraDownload
-                elif "ERROR" in resp_upper or "FAIL" in resp_upper:
-                    return 5  # CameraError
-                else:
-                    # Dla "OK" i wszelkich innych statusów spoczynkowych
-                    return 0  # CameraIdle
+                if "EXPOS" in resp_upper: return 2
+                elif "WAIT" in resp_upper: return 1
+                elif "READ" in resp_upper: return 3
+                elif "DOWNLOAD" in resp_upper: return 4
+                elif "ERROR" in resp_upper or "FAIL" in resp_upper: return 5
+                else: return 0
             
-            # 3. Zwracamy odpowiedź (jeśli to nie jest camerastate, zwróci tekst)
             return raw_response
 
         except _TEMPORARY_IO_ERRORS as e:
-            # Device unreachable — sustained external state. Surface as
-            # 4005 NORMAL so cycle-query subscribers self-recover via
-            # ErrorPolicy.SERVICE retries when the device returns.
             raise TreeOtherError(address=None, code=4005,
                                  message=f"IRIS CCD unreachable on GET {component.kind}.{variable}: {e}",
                                  severity=TreeOtherError.SEVERITY_NORMAL) from e
