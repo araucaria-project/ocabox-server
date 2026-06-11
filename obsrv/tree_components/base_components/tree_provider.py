@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import Awaitable, Callable, ClassVar, List, Optional
 
 from obsrv.tree_components.base_components.address_dispatcher import AddressDispatcher
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
@@ -21,15 +21,39 @@ class TreeProvider(TreeBaseProvider, AddressDispatcher):
 
     :ivar _subcontractor: instance of next component in tree
 
+    :cvar PUSH_DRIVEN: Subclasses whose get_value reads from in-process
+        state (rather than pulling from an external connector each time)
+        set this to True. The tree-build harness then asserts that
+        ``set_change_notifier`` was wired during assembly — so a new
+        push-driven provider added without wiring fails fast at server
+        start instead of silently falling back to ``t_tolerance``-cadence
+        polling. See ``Architecture/Observable Pattern for
+        ocabox-server`` in the ecosystem vault.
+
     Conforms to:
         ProvidesResponseProtocol
     """
 
     COMPONENT_DEFAULT_NAME: str = 'TreeProvider'
 
+    PUSH_DRIVEN: ClassVar[bool] = False
+
     def __init__(self, component_name: str, source_name: str, subcontractor: ProvidesResponseProtocol = None,
                  **kwargs):
         super().__init__(component_name=component_name, subcontractor=subcontractor, source_name=source_name, **kwargs)
+        self._change_notifier: Optional[Callable[[], Awaitable[None]]] = None
+
+    def set_change_notifier(self, notify: Callable[[], Awaitable[None]]) -> None:
+        """Wire a callable that wakes up cycle-query subscribers.
+
+        Called during tree-build for ``PUSH_DRIVEN`` providers. The
+        ``notify`` callable should fire the enclosing freezer's
+        ``set_change_event`` (typically routed through
+        ``TreeCache._report_new_value``). Subclasses should subscribe
+        to their underlying observables and forward state changes to
+        ``notify``.
+        """
+        self._change_notifier = notify
 
     async def get_value(self, request: ValueRequest, **kwargs) -> Value or None:
         # docstring is imported from parent
