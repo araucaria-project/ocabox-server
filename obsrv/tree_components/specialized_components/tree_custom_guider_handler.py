@@ -29,7 +29,8 @@ class TreeCustomGuiderHandler(TreeProvider):
     async def get_value(self, request: ValueRequest, **kwargs) -> Optional[Value]:
         # deprecated
 
-        raise AddressError(code=1002, message=f'Deprecated module {self.get_name()}')
+        raise AddressError(code=1002, message=f'Deprecated module {self.get_name()}',
+                           severity=AddressError.SEVERITY_CRITICAL)
 
     def get_publishable_config(self) -> Optional[dict]:
         source_name = self.get_source_name()

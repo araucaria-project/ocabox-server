@@ -1,7 +1,7 @@
 
 import logging
 import time
-from typing import Dict, List
+from typing import Awaitable, Callable, Dict, List, Optional
 
 from obcom.data_colection.address import AddressError
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
@@ -10,6 +10,7 @@ from obcom.data_colection.coded_error import TreeStructureError, TreeOtherError
 from obcom.data_colection.tree_user import BaseTreeUser, TreeServiceUser
 from obcom.data_colection.value import Value
 from obcom.data_colection.value_call import ValueRequest
+from obsrv.utils.observable import Observable
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -36,7 +37,11 @@ class TreeBaseRequestBlocker(TreeBaseProvider):
                                               'PUT': []}
         self._white_lists: Dict[str, list] = {'GET': [],
                                               'PUT': []}
-        self._safety_cutoff_engaged: bool = False
+        # Observable so subscribers (e.g. TreeBlockerAccessGrantor.safety_cutoff_state)
+        # can wake within an event-loop tick of state changes rather than within
+        # t_tolerance. ``_safety_cutoff_list`` stays plain — it's loaded once from
+        # config and not mutated at runtime.
+        self._safety_cutoff_engaged: Observable[bool] = Observable(False)
         self._safety_cutoff_list: List[str] = []
         self._init_lists_of_special_requests()
         self._init_safety_cutoff_list()
@@ -55,7 +60,7 @@ class TreeBaseRequestBlocker(TreeBaseProvider):
             raise TreeOtherError(code=4001, message='Unrecognized request type')
 
         # safety cutoff — blocks dangerous commands when engaged, only bypassable by dedicated param
-        if self._safety_cutoff_engaged and self._is_cutoff_blocked(request=request):
+        if self._safety_cutoff_engaged.get() and self._is_cutoff_blocked(request=request):
             if not self._check_has_safety_cutoff_bypass(request=request):
                 command = '.'.join(request.address[request.index:])
                 raise AddressError(code=1005,
@@ -193,21 +198,33 @@ class TreeBaseRequestBlocker(TreeBaseProvider):
 
     def engage_safety_cutoff(self):
         """Engage the safety cutoff switch, blocking all dangerous commands."""
-        self._safety_cutoff_engaged = True
+        self._safety_cutoff_engaged.set(True)
         logger.info(f"Safety cutoff ENGAGED on {self.get_name()}")
 
     def disengage_safety_cutoff(self):
         """Disengage the safety cutoff switch, restoring normal operation."""
-        self._safety_cutoff_engaged = False
+        self._safety_cutoff_engaged.set(False)
         logger.info(f"Safety cutoff DISENGAGED on {self.get_name()}")
 
     def is_safety_cutoff_engaged(self) -> bool:
         """Return whether the safety cutoff switch is currently engaged."""
-        return self._safety_cutoff_engaged
+        return self._safety_cutoff_engaged.get()
 
     def get_safety_cutoff_list(self) -> List[str]:
         """Return the list of commands/addresses blocked when safety cutoff is engaged."""
         return list(self._safety_cutoff_list)
+
+    def subscribe_safety_cutoff_change(
+        self, watcher: Callable[[bool], Optional[Awaitable[None]]]
+    ) -> Callable[[], None]:
+        """Register a watcher fired when ``safety_cutoff_engaged`` toggles.
+
+        Returned callable unsubscribes (idempotent). Used by
+        ``TreeBlockerAccessGrantor`` to wake cycle-query subscribers
+        of ``safety_cutoff_state`` within an event-loop tick of the
+        engage/disengage call.
+        """
+        return self._safety_cutoff_engaged.subscribe(watcher)
 
     def _is_cutoff_blocked(self, request: ValueRequest) -> bool:
         """Check if the request targets a command blocked by the safety cutoff.
