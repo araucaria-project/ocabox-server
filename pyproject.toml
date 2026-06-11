@@ -28,6 +28,7 @@ pyaraucaria = {git = "https://github.com/araucaria-project/pyaraucaria.git"}
 #scikit-learn = ">=1.3.0"
 serverish = {version = "^2.0.2", extras = ["messenger"]}
 #astroplan = "^0.9.0"
+nats-py = "^2.6.0"
 
 
 
