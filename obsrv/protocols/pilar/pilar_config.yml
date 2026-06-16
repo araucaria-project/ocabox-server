@@ -35,7 +35,7 @@ components:
   telescope: # 'telescope' jest używane jako standardowa nazwa dla komponentu 'mount'
 #    reading:
     mappings:
-      #connected: "POSITION.INSTRUMENTAL.RA.POWER_STATE" #Polecenie dobre, ale wykrzacza się samo "conencted"
+      connected: "POSITION.INSTRUMENTAL.RA.POWER_STATE" #Polecenie dobre, ale wykrzacza się samo "conencted"
       rightascension: "POSITION.EQUATORIAL.RA_CURRENT"
       rightascension_move: "OBJECT.EQUATORIAL.RA"
       declination: "POSITION.EQUATORIAL.DEC_CURRENT"
@@ -93,7 +93,7 @@ components:
         - variable: "altitude_move"
           value: "{Altitude}"
         - variable: "tracking"
-          value: 2
+          value: 1
         - verify:
             azimuth: "{Azimuth}"
             altitude: "{Altitude}"
