@@ -12,6 +12,7 @@ settings:
 components:
   focuser:
     mappings:
+      connected: "POSITION.INSTRUMENTAL.FOCUS.POWER_STATE"
       position: "POINTING.SETUP.FOCUS.POSITION"
       tempcomp: "POINTING.SETUP.FOCUS.TEMPCOMP"
       ismoving: "POINTING.SETUP.FOCUS.ISMOVING"
@@ -34,18 +35,23 @@ components:
   telescope: # 'telescope' jest używane jako standardowa nazwa dla komponentu 'mount'
 #    reading:
     mappings:
-      rightascension: "OBJECT.EQUATORIAL.RA"
-      declination: "OBJECT.EQUATORIAL.DEC"
-      azimuth: "OBJECT.INSTRUMENTAL.AZ"
-      altitude: "OBJECT.INSTRUMENTAL.ALT"
+      connected: "POSITION.INSTRUMENTAL.RA.POWER_STATE"
+      rightascension: "POSITION.EQUATORIAL.RA_CURRENT"
+      rightascension_move: "OBJECT.EQUATORIAL.RA"
+      declination: "POSITION.EQUATORIAL.DEC_CURRENT"
+      declination_move: "OBJECT.EQUATORIAL.DEC"
+      azimuth: "POSITION.HORIZONTAL.AZ"
+      azimuth_move: "OBJECT.INSTRUMENTAL.AZ"
+      altitude: "POSITION.HORIZONTAL.ALT"
+      altitude_move: "OBJECT.INSTRUMENTAL.ALT"
       athome: "TELESCOPE.READY_STATE"
       atpark: "TELESCOPE.READY_STATE"
       slewing: "TELESCOPE.MOTION_STATE"
       tracking: "POINTING.TRACK"
-      motorstatus: "CABINET.POWER"
+      motorstatus: "TELESCOPE.READY"
       abortslew: "TELESCOPE.STOP"
-      park: "TELESCOPE.READY"
-      motor: "CABINET.POWER"
+      park: "TELESCOPE.READY" #TO CHANGE
+      motor: "CABINET.POWER" #TO CHANGE
 #      errorstring: "SYSTEM.ERROR.STRING"
 #      sideofpier: "POINTING.STATE.SIDEOFPIER"
     actions:
@@ -54,9 +60,9 @@ components:
           value: 2000.0
         - variable: "equinox"
           value: 2000.0
-        - variable: "rightascension"
+        - variable: "rightascension_move"
           value: "{RightAscension}"
-        - variable: "declination"
+        - variable: "declination_move"
           value: "{Declination}"
         - tracking: "tracking"
           value: 2
@@ -70,9 +76,9 @@ components:
           value: 2000.0
         - variable: "equinox"
           value: 2000.0
-        - variable: "rightascension"
+        - variable: "rightascension_move"
           value: "{RightAscension}"
-        - variable: "declination"
+        - variable: "declination_move"
           value: "{Declination}"
         - tracking: "tracking"
           value: 2
@@ -82,9 +88,9 @@ components:
             tolerance: 0.05
             timeout: 120
       slewtoaltaz:
-        - variable: "azimuth"
+        - variable: "azimuth_move"
           value: "{Azimuth}"
-        - variable: "altitude"
+        - variable: "altitude_move"
           value: "{Altitude}"
         - variable: "tracking"
           value: 2
@@ -94,9 +100,9 @@ components:
             tolerance: 0.05
             timeout: 120
       slewtoaltazasync:
-        - variable: "azimuth"
+        - variable: "azimuth_move"
           value: "{Azimuth}"
-        - variable: "altitude"
+        - variable: "altitude_move"
           value: "{Altitude}"
         - variable: "tracking"
           value: 2
