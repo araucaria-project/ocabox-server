@@ -35,7 +35,7 @@ components:
   telescope: # 'telescope' jest używane jako standardowa nazwa dla komponentu 'mount'
 #    reading:
     mappings:
-      connected: "POSITION.INSTRUMENTAL.RA.POWER_STATE" #Polecenie dobre, ale wykrzacza się samo "conencted"
+      connected: "POSITION.INSTRUMENTAL.RA.POWER_STATE" #Polecenie dobre, ale wykrzacza się samo "conncted"
       rightascension: "POSITION.EQUATORIAL.RA_CURRENT"
       rightascension_move: "OBJECT.EQUATORIAL.RA"
       declination: "POSITION.EQUATORIAL.DEC_CURRENT"
@@ -156,7 +156,7 @@ components:
         - variable: "position"
           value: "SYNC:{Position}"
 
-  covercalibratior:
+  covercalibrator:
     mappings:
       coverstate: "AUXILIARY.COVER.REALPOS"
       covermove: "AUXILIARY.COVER.TARGETPOS"
