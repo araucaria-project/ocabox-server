@@ -474,8 +474,12 @@ class Tertiary(Device):
     through to a nonexistent ALPACA endpoint.
 
     Attributes (GET): ``nasmythport``, ``tertiarystatus`` and its decomposed
-    fields ``angle``, ``moving``, ``motoron``, ``errorraised``, ``portname``.
+    fields ``angle``, ``moving``, ``motoron``, ``portname``.
     Attributes (PUT): ``selectnasmythport`` (``Position``: physical port number).
+
+    A controller-reported fault must surface through the standard error model
+    (``TreeOtherError(4009)``, "device reported an error"), not as a readable
+    boolean — except in ``tertiarystatus``, the raw diagnostic view.
     """
     KIND = StandardTelescopeComponents.TERTIARY
 
@@ -507,10 +511,6 @@ class Tertiary(Device):
         """True when the M3 motor is powered (bool)."""
         self._not_implemented('motoron')
 
-    async def errorraised(self, **kwargs):
-        """True when the M3 controller reports an error (bool)."""
-        self._not_implemented('errorraised')
-
     async def portname(self, **kwargs):
         """Vendor name of the current port, e.g. 'ADR10' (str)."""
         self._not_implemented('portname')
@@ -523,24 +523,22 @@ class Tertiary(Device):
 class TertiaryOCA(Tertiary):
     """ASA AutoSlew tertiary (OCA), driven through the mount's ALPACA action channel.
 
-    AutoSlew exposes three vendor actions on the *telescope* device:
-    ``selectnasmythport`` (set), ``getcurrentnasmythport`` (read, returns the
-    port number as a string) and ``tertiarystatus`` (read, returns JSON:
-    ``{"Moving", "MotorOn", "ErrorRaised", "Angle", "NasmythPort", "PortName"}``).
-    Port numbers are the physical AutoSlew ports (jk15: 1=ADR6/beso, 2=ADR10/andor)
-    — they are NOT 0-based; the observatory config maps them to instruments.
+    All reads are served by the AutoSlew vendor action ``tertiarystatus``
+    (JSON: ``{"Moving", "MotorOn", "ErrorRaised", "Angle", "NasmythPort",
+    "PortName"}``); movement by ``selectnasmythport``. Port numbers are the
+    physical AutoSlew ports (jk15: 1=ADR6/beso, 2=ADR10/andor) — they are NOT
+    0-based; the observatory config maps them to instruments.
+
+    A controller fault (``ErrorRaised`` in the status) is translated to the
+    standard error model: every decomposed read raises ``TreeOtherError(4009,
+    NORMAL)`` ("device reported an error"), so subscribers and command flows
+    see it through their normal error handling instead of polling a
+    vendor-specific boolean. ``tertiarystatus`` itself always returns the raw
+    dict — the diagnostic view of a faulted controller.
     """
 
     async def nasmythport(self, **kwargs):
-        ret = await self._put("action", kind=Telescope.KIND,
-                              Action='getcurrentnasmythport', Parameters='')
-        try:
-            return int(ret)
-        except (TypeError, ValueError):
-            raise TreeValueError(
-                address=None, code=2002,
-                message=f"Unparsable getcurrentnasmythport reply from AutoSlew: {ret!r}",
-                severity=TreeValueError.SEVERITY_NORMAL) from None
+        return await self._status_field('NasmythPort')
 
     async def tertiarystatus(self, **kwargs):
         return await self._status()
@@ -553,9 +551,6 @@ class TertiaryOCA(Tertiary):
 
     async def motoron(self, **kwargs):
         return await self._status_field('MotorOn')
-
-    async def errorraised(self, **kwargs):
-        return await self._status_field('ErrorRaised')
 
     async def portname(self, **kwargs):
         return await self._status_field('PortName')
@@ -570,8 +565,15 @@ class TertiaryOCA(Tertiary):
                 address=None, code=4007,
                 message=f"selectnasmythport requires an integer 'Position' parameter, got {position!r}",
                 severity=TreeOtherError.SEVERITY_NORMAL) from None
-        return await self._put("action", kind=Telescope.KIND,
-                               Action='selectnasmythport', Parameters=str(position))
+        ret = await self._put("action", kind=Telescope.KIND,
+                              Action='selectnasmythport', Parameters=str(position))
+        if str(ret).strip().lower() != 'true':
+            # AutoSlew acknowledges an accepted movement with "true"
+            raise TreeOtherError(
+                address=None, code=4009,
+                message=f"AutoSlew refused selectnasmythport {position}: {ret!r}",
+                severity=TreeOtherError.SEVERITY_NORMAL)
+        return ret
 
     async def _status(self) -> dict:
         raw = await self._put("action", kind=Telescope.KIND,
@@ -585,7 +587,15 @@ class TertiaryOCA(Tertiary):
                 severity=TreeValueError.SEVERITY_NORMAL) from None
 
     async def _status_field(self, field: str):
+        """Extract one field from ``tertiarystatus``, translating a controller
+        fault into the standard 4009 device error."""
         status = await self._status()
+        if status.get('ErrorRaised'):
+            raise TreeOtherError(
+                address=None, code=4009,
+                message=f"M3 controller reports an error (AutoSlew ErrorRaised); "
+                        f"status: {status!r}",
+                severity=TreeOtherError.SEVERITY_NORMAL)
         try:
             return status[field]
         except KeyError:

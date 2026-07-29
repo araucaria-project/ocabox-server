@@ -6,13 +6,19 @@ All notable changes to this project will be documented in this file.
 ## [2.3.18]
 ### Added
 - **Tertiary (M3) read-back** — `TertiaryOCA` now exposes GET-able (hence
-  cacheable/subscribable) attributes implemented via ASA AutoSlew vendor
-  actions on the mount's ALPACA device: `nasmythport` (current physical port,
-  int, via `getcurrentnasmythport`) and `tertiarystatus` (full dict via
-  `tertiarystatus`) plus its decomposed fields `angle`, `moving`, `motoron`,
-  `errorraised`, `portname`. Port numbers are the physical AutoSlew ports
-  (jk15: 1=ADR6/beso, 2=ADR10/andor; verified live on jk15-tcu 2026-07-29) —
-  NOT 0-based.
+  cacheable/subscribable) attributes, all served by the single ASA AutoSlew
+  vendor action `tertiarystatus` on the mount's ALPACA device:
+  `tertiarystatus` (full dict) and its decomposed fields `nasmythport`,
+  `angle`, `moving`, `motoron`, `portname`. Port numbers are the physical
+  AutoSlew ports (jk15: 1=ADR6/beso, 2=ADR10/andor; verified live on jk15-tcu
+  2026-07-29) — NOT 0-based.
+- **Controller faults use the standard error model**: AutoSlew `ErrorRaised`
+  is translated to `TreeOtherError(4009, NORMAL)` ("device reported an
+  error") on every decomposed read, and a non-`true` acknowledgement of
+  `selectnasmythport` raises `4009` as well — clients see a standard
+  `OcaboxDeviceError` instead of polling a vendor-specific boolean.
+  `tertiarystatus` always returns the raw dict (incl. `ErrorRaised`) as the
+  diagnostic view of a faulted controller.
 - Base `Tertiary` is now an explicit interface contract: every method raises
   `TreeStructureError(3002, CRITICAL)`, so a tree configured with the plain
   `tertiary` kind fails loudly instead of falling through to a nonexistent
