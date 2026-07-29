@@ -3,6 +3,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.3.18]
+### Added
+- **Tertiary (M3) read-back** — `TertiaryOCA` now exposes GET-able (hence
+  cacheable/subscribable) attributes implemented via ASA AutoSlew vendor
+  actions on the mount's ALPACA device: `nasmythport` (current physical port,
+  int, via `getcurrentnasmythport`) and `tertiarystatus` (full dict via
+  `tertiarystatus`) plus its decomposed fields `angle`, `moving`, `motoron`,
+  `errorraised`, `portname`. Port numbers are the physical AutoSlew ports
+  (jk15: 1=ADR6/beso, 2=ADR10/andor; verified live on jk15-tcu 2026-07-29) —
+  NOT 0-based.
+- Base `Tertiary` is now an explicit interface contract: every method raises
+  `TreeStructureError(3002, CRITICAL)`, so a tree configured with the plain
+  `tertiary` kind fails loudly instead of falling through to a nonexistent
+  ALPACA endpoint.
+### Changed
+- `TertiaryOCA.selectnasmythport_put` validates its `Position` parameter
+  (int or int-like string) and raises `TreeOtherError(4007, NORMAL)` instead
+  of silently sending an empty-parameter movement action.
+### Dependencies
+- Requires ocabox-common ≥ `1.2.2` — fixes `TreeStructureError` dropping the
+  `severity` argument (every 3002 was silently demoted to NORMAL, making
+  SERVICE-policy clients retry forever against not-implemented endpoints).
+
 ## [2.3.17]
 ### Fixed
 - `AlpacaConnector` now uses a single long-lived `aiohttp.ClientSession` per connector (created lazily on first request) instead of opening a fresh session + TCP connection per request. The old behaviour issued a fresh `getaddrinfo` on every poll (~150 DNS queries/s in production, all cache-missing), so a brief upstream-DNS hiccup saturated the resolver thread-pool with uncancellable lookups and the process never recovered without a restart (Phenomenon A — "loses all ALPACA hosts ~hourly, curl still works"). Keep-alive + a connector-level DNS cache (`ttl_dns_cache=30s`) collapse that storm.
