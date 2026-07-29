@@ -21,7 +21,7 @@ All notable changes to this project will be documented in this file.
     raw `RuntimeError`, `put` returns a `{"status": "failed"}` dict) — tracked
     as a follow-up; see `doc/errors.md` "Device-reported errors".
 ### Dependencies
-- Requires ocabox-common ≥ `1.1.2`, which registers the 4009 code description
+- Requires ocabox-common ≥ `1.2.1`, which registers the 4009 code description
   (dependency tracks git `master`; 4009 still functions without it — the
   description lookup just degrades to empty).
 
