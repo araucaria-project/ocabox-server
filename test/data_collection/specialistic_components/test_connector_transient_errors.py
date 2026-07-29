@@ -4,7 +4,8 @@ must surface as ``TreeOtherError(4005, NORMAL)`` so cycle-query
 subscribers running ``ErrorPolicy.SERVICE`` (PMS-style daemons)
 auto-recover when the device returns. Device-replied errors (raised as
 ``RuntimeError`` inside the connector) must surface as
-``TreeValueError(2002, NORMAL)`` rather than being swallowed.
+``TreeOtherError(4009, NORMAL)`` ("device reported an error") rather than
+being swallowed.
 
 See ``doc/errors.md`` "TEMPORARY vs NORMAL — blip vs sustained" for the
 convention and issue #20 for the failure mode this test guards against.
@@ -17,7 +18,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 from obcom.data_colection.coded_error import TreeOtherError
 from obcom.data_colection.response_error import ResponseError
-from obcom.data_colection.value import TreeValueError
+from obsrv.protocols.alpaca.alpaca_connector import AlpacaConnector
+from obsrv.protocols.alpaca.alpaca_exceptions import AlpacaError
 from obsrv.protocols.iris_ccd.iris_ccd_connector import IrisCcdConnector
 from obsrv.protocols.pilar.pilar_connector import PilarConnector
 
@@ -73,17 +75,19 @@ class IrisCcdTransientErrorsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.code, 4005)
         self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
 
-    async def test_get_runtime_error_raises_2002_normal(self):
+    async def test_get_runtime_error_raises_4009_normal(self):
         """Device-replied error (RuntimeError raised inside _execute_command
-        when the device returns non-OKAY) surfaces as 2002 NORMAL — real
-        instrument-state failure, retryable per client ErrorPolicy."""
+        when the device returns non-OKAY) surfaces as 4009 NORMAL ("device
+        reported an error") — the connector worked, the instrument faulted;
+        distinct from a TIC-internal value-build failure, retryable per the
+        client ErrorPolicy."""
         connector = _make_iris_connector()
         connector._execute_command = AsyncMock(
             side_effect=RuntimeError('IRIS CCD error: PARAM_OUT_OF_RANGE')
         )
-        with self.assertRaises(TreeValueError) as ctx:
+        with self.assertRaises(TreeOtherError) as ctx:
             await connector.get(_make_iris_component(), 'camerastate')
-        self.assertEqual(ctx.exception.code, 2002)
+        self.assertEqual(ctx.exception.code, 4009)
         self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
 
     async def test_put_connection_refused_raises_4005_normal(self):
@@ -96,14 +100,14 @@ class IrisCcdTransientErrorsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.code, 4005)
         self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
 
-    async def test_put_runtime_error_raises_2002_normal(self):
+    async def test_put_runtime_error_raises_4009_normal(self):
         connector = _make_iris_connector()
         connector._execute_command = AsyncMock(
             side_effect=RuntimeError('IRIS CCD error: BUSY')
         )
-        with self.assertRaises(TreeValueError) as ctx:
+        with self.assertRaises(TreeOtherError) as ctx:
             await connector.put(_make_iris_component(), 'binx', value=2)
-        self.assertEqual(ctx.exception.code, 2002)
+        self.assertEqual(ctx.exception.code, 4009)
         self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
 
     async def test_call_connection_refused_raises_4005_normal(self):
@@ -115,6 +119,37 @@ class IrisCcdTransientErrorsTest(unittest.IsolatedAsyncioTestCase):
             await connector.call(_make_iris_component(), 'startexposure', duration=1.0)
         self.assertEqual(ctx.exception.code, 4005)
         self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+
+
+class AlpacaDeviceErrorTest(unittest.TestCase):
+    """ALPACA numeric driver faults (e.g. ASCOM InvalidOperationException 1035
+    "Telescope is not ready, please clear Error") surface as
+    ``TreeOtherError(4009, NORMAL)`` carrying the driver's ``error_number`` in
+    ``device_errno`` — distinct from device-busy (4008) and from a TIC-internal
+    value-build failure (2002). ``raise_tree_exeption`` re-raises the mapped
+    coded error; it uses no connector state, so a bare instance suffices."""
+
+    @staticmethod
+    def _connector() -> AlpacaConnector:
+        c = AlpacaConnector.__new__(AlpacaConnector)
+        c._http_session = None  # quiet __del__/is_session_closed on GC of the bare instance
+        return c
+
+    def test_numeric_error_raises_4009_with_device_errno(self):
+        err = AlpacaError(1035, "Telescope is not ready, please clear Error")
+        with self.assertRaises(TreeOtherError) as ctx:
+            self._connector().raise_tree_exeption(
+                err, address="http://tcu:11111/api/v1/telescope/0/slewtocoordinatesasync")
+        self.assertEqual(ctx.exception.code, 4009)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+        self.assertEqual(ctx.exception.kwargs.get('device_errno'), 1035)
+        self.assertIn("clear Error", ctx.exception.message)
+
+    def test_device_busy_errno_still_raises_4008(self):
+        err = AlpacaError(20072, "DRV_ACQUIRING")
+        with self.assertRaises(TreeOtherError) as ctx:
+            self._connector().raise_tree_exeption(err, address="http://tcu:11111/x")
+        self.assertEqual(ctx.exception.code, 4008)
 
 
 def _make_pilar_connector() -> PilarConnector:

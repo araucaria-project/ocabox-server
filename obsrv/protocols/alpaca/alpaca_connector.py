@@ -280,11 +280,18 @@ class AlpacaConnector(Connector):
             raise TreeValueError(address=None, code=2002, message=e.message)
         except AlpacaError as e:
             # when server alpaca throws an error with a numeric value
-            logger.warning(f"Alpaca throw numeric error for request {address}")
+            logger.warning(f"Alpaca numeric error {e.error_number} for request {address}: {e.message}")
             if e.error_number in _DEVICE_BUSY_ERRNOS:
                 raise TreeOtherError(address=None, code=4008, message=e.message,
                                      severity=TreeOtherError.SEVERITY_TEMPORARY)
-            raise TreeValueError(address=None, code=2002, message=e.message)
+            # Device/driver reported a fault (e.g. ASCOM InvalidOperationException
+            # 1035 "Telescope is not ready, please clear Error"). TIC worked; the
+            # device said no. Surface as 4009 carrying the driver's numeric code so
+            # the client distinguishes this from a TIC-internal value-build failure
+            # (2002) and reads the errno without parsing the message string.
+            raise TreeOtherError(address=None, code=4009, message=e.message,
+                                 severity=TreeOtherError.SEVERITY_NORMAL,
+                                 device_errno=e.error_number)
         except AlpacaHttpError as e:
             # if server alpaca return unresolved error
             logger.warning(f"Alpaca throw AlpacaHttpError for request {address}")

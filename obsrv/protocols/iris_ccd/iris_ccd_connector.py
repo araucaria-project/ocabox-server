@@ -6,7 +6,6 @@ import confuse
 
 from obsrv.protocols.alpaca.alpaca_connector import Connector
 from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
-from obcom.data_colection.value import TreeValueError
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -194,11 +193,11 @@ class IrisCcdConnector(Connector):
                                  severity=TreeOtherError.SEVERITY_NORMAL) from e
         except RuntimeError as e:
             # Device replied with a non-OKAY response (raised in _execute_command).
-            # Real instrument-state error — surface as 2002 NORMAL so the client
-            # sees it but can still retry per its ErrorPolicy.
-            raise TreeValueError(address=None, code=2002,
+            # The connector worked; the instrument reported a fault — surface as
+            # 4009 NORMAL so the client tells it apart from a TIC-internal failure.
+            raise TreeOtherError(address=None, code=4009,
                                  message=f"IRIS CCD device error on GET {component.kind}.{variable}: {e}",
-                                 severity=TreeValueError.SEVERITY_NORMAL) from e
+                                 severity=TreeOtherError.SEVERITY_NORMAL) from e
 
     async def put(self, component: 'Component', variable: str, kind=None, **data):
         address = component.get_option_recursive('address')
@@ -233,9 +232,9 @@ class IrisCcdConnector(Connector):
                                  message=f"IRIS CCD unreachable on PUT {component.kind}.{variable}: {e}",
                                  severity=TreeOtherError.SEVERITY_NORMAL) from e
         except RuntimeError as e:
-            raise TreeValueError(address=None, code=2002,
+            raise TreeOtherError(address=None, code=4009,
                                  message=f"IRIS CCD device error on PUT {component.kind}.{variable}: {e}",
-                                 severity=TreeValueError.SEVERITY_NORMAL) from e
+                                 severity=TreeOtherError.SEVERITY_NORMAL) from e
 
     async def call(self, component: 'Component', function: str, **data):
         address = component.get_option_recursive('address')
@@ -270,9 +269,9 @@ class IrisCcdConnector(Connector):
                                  message=f"IRIS CCD unreachable on CALL {function}: {e}",
                                  severity=TreeOtherError.SEVERITY_NORMAL) from e
         except RuntimeError as e:
-            raise TreeValueError(address=None, code=2002,
+            raise TreeOtherError(address=None, code=4009,
                                  message=f"IRIS CCD device error on CALL {function}: {e}",
-                                 severity=TreeValueError.SEVERITY_NORMAL) from e
+                                 severity=TreeOtherError.SEVERITY_NORMAL) from e
 
     async def subscribe(self, variables: Iterable[Tuple[str, str]], callback: Callable):
         pass

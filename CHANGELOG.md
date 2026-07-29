@@ -3,6 +3,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.3.16]
+### Added
+- Device-reported faults now surface as `TreeOtherError(code=4009, NORMAL)`
+  ("device reported an error") instead of `TreeValueError(2002)`. This
+  separates *the device/driver faulted* (TIC worked, relaying the device's
+  error) from *TIC failed to build the value*. The driver's numeric code is
+  carried in `device_errno` (kwargs), so clients read e.g. ASCOM `1035`
+  ("Telescope is not ready, please clear Error") without parsing the message
+  string or reading server logs.
+  - `AlpacaConnector.raise_tree_exeption`: numeric `AlpacaError` (other than
+    device-busy `20072`) → `4009` with `device_errno=error_number`. Warning
+    log now includes the errno and message.
+  - `IrisCcdConnector`: device-replied `RuntimeError` on `get`/`put`/`call`
+    → `4009` (was `2002`).
+  - Pilar's device-reply path is **not** converted yet (its `get` re-raises
+    raw `RuntimeError`, `put` returns a `{"status": "failed"}` dict) — tracked
+    as a follow-up; see `doc/errors.md` "Device-reported errors".
+### Dependencies
+- Requires ocabox-common ≥ `1.1.2`, which registers the 4009 code description
+  (dependency tracks git `master`; 4009 still functions without it — the
+  description lookup just degrades to empty).
+
 ## [2.3.15]
 ### Fixed
 - `IrisCcdConnector` no longer swallows transient TCP failures (`ConnectionError`, `BrokenPipeError`, `OSError`, `asyncio.TimeoutError`, `TimeoutError`) and returns `None` / `{"status": "failed"}`. The swallow caused cycle-query subscribers to escalate to `TreeValueError(2003, CRITICAL)` after retries, terminating PMS subscriptions permanently on transient device outages with no auto-recovery (issue #20). Transient IO now raises `TreeOtherError(4005, NORMAL)`; device-replied errors (`RuntimeError`) raise `TreeValueError(2002, NORMAL)`. Applied symmetrically to `get`, `put`, and `call`.
