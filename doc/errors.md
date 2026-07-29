@@ -117,6 +117,8 @@ Codes live in `obcom.data_colection.coded_error`. Numeric ranges signal the erro
 | 4005 | Cannot connect to external service               | `NORMAL`         | Connector might come back; transient external state.         |
 | 4006 | Incorrectly calculated request timeout           | `CRITICAL`       | TIC bug.                                                     |
 | 4007 | Wrong argument                                   | `NORMAL`         |                                                              |
+| 4008 | Device busy with another operation               | `TEMPORARY`      | e.g. Andor `DRV_ACQUIRING (20072)`. Client maps to `CameraBusy`. |
+| 4009 | Device reported an error                         | `NORMAL`         | Driver/instrument faulted (TIC worked). Carries `device_errno` in kwargs. Client maps to `OcaboxDeviceError`. |
 
 ## Per-connector contract
 
@@ -129,6 +131,12 @@ All connectors live under `obsrv/protocols/`. They inherit a base `Connector` wi
 | IRIS-CCD  | `obsrv/protocols/iris_ccd/iris_ccd_connector.py` | Same: `KeyError` → `TreeStructureError(3002, CRITICAL)`. Malformed entries (missing `command` key) also `3002 CRITICAL`. |
 
 For sustained connectivity loss (TCP refused, broken pipe, OS-level socket errors), connectors raise `TreeOtherError(4005, NORMAL)` against the `_TEMPORARY_IO_ERRORS` set so cycle-query subscribers self-recover via the client's `ErrorPolicy.SERVICE` retries when the device returns. For genuine single-poll blips that the connector can absorb internally, `SEVERITY_TEMPORARY` is appropriate — see "TEMPORARY vs NORMAL" above. Connectors must **not** swallow `_TEMPORARY_IO_ERRORS` and return `None`/`{}`: the freezer cannot distinguish that from a successful null read and the operator gets no signal.
+
+### Device-reported errors (`4009`)
+
+When the connector reached the device fine but the **device/driver itself reported a fault** (ASCOM numeric `AlpacaError`; an IRIS-CCD `RuntimeError` from a non-OKAY reply), raise `TreeOtherError(code=4009, severity=NORMAL, device_errno=<numeric driver code>)` carrying the device's own message. This is distinct from `2002` (TIC failed to build the value) — here TIC worked and is faithfully relaying a device error — and from `4005` (couldn't reach the device at all). The optional `device_errno` rides in kwargs straight through to the client, so consumers read e.g. ASCOM `1035` ("Telescope is not ready, please clear Error") without parsing the message string or reading server logs. The client maps `4009` to a dedicated `OcaboxDeviceError` and (in the planrunner) does **not** auto-retry it — a latched device state needs operator action, not a retry storm.
+
+> Status: ALPACA (numeric `AlpacaError`) and IRIS-CCD (`RuntimeError`) emit `4009`. Pilar's device-reply path (`get` re-raises raw `RuntimeError`; `put` returns a `{"status": "failed"}` dict) is **not yet aligned** — it needs its own cleanup to raise `4009` consistently.
 
 ## Client behaviour — `ConditionalCycleQuery`
 

@@ -3,7 +3,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [2.3.16]
+## [2.3.17]
 ### Fixed
 - `AlpacaConnector` now uses a single long-lived `aiohttp.ClientSession` per connector (created lazily on first request) instead of opening a fresh session + TCP connection per request. The old behaviour issued a fresh `getaddrinfo` on every poll (~150 DNS queries/s in production, all cache-missing), so a brief upstream-DNS hiccup saturated the resolver thread-pool with uncancellable lookups and the process never recovered without a restart (Phenomenon A — "loses all ALPACA hosts ~hourly, curl still works"). Keep-alive + a connector-level DNS cache (`ttl_dns_cache=30s`) collapse that storm.
 - `IrisCcdConnector` no longer leaks a UDP socket per timed-out command. `_execute_command` dropped the cached endpoint with `del self._endpoints[address]` on timeout/reconnect without closing the transport, orphaning the socket FD; with the device unreachable this leaked ~4 FDs/min until `RLIMIT_NOFILE` (1024) was exhausted. The leak was previously masked by the hourly Phenomenon-A restarts and surfaced once the ALPACA fix above let the process run stably. New `_drop_endpoint()` helper closes the transport before dropping it.
@@ -11,6 +11,29 @@ All notable changes to this project will be documented in this file.
 - `AlpacaConnector` session uses `ClientTimeout(total=10s, connect=5s, sock_connect=5s)` (aiohttp default is 5 min) and `TCPConnector(limit_per_host=8)`. The per-host cap also keeps the ASCOM driver queue shallow, mitigating the `code=1026` filterwheel queue-depth timeouts (Phenomenon B).
 ### Dependencies
 - Added `aiodns` so aiohttp's `DefaultResolver` is the async (c-ares) resolver, which runs DNS on the event loop instead of the blocking `getaddrinfo` thread-pool.
+> Note: this work ran on production `tic` since 2026-06-25 as version "2.3.16" from branch `fix/alpaca-dns-resolver-wedge`; it was renumbered to 2.3.17 on merge because master's 2.3.16 was taken by the 4009 release below.
+
+## [2.3.16]
+### Added
+- Device-reported faults now surface as `TreeOtherError(code=4009, NORMAL)`
+  ("device reported an error") instead of `TreeValueError(2002)`. This
+  separates *the device/driver faulted* (TIC worked, relaying the device's
+  error) from *TIC failed to build the value*. The driver's numeric code is
+  carried in `device_errno` (kwargs), so clients read e.g. ASCOM `1035`
+  ("Telescope is not ready, please clear Error") without parsing the message
+  string or reading server logs.
+  - `AlpacaConnector.raise_tree_exeption`: numeric `AlpacaError` (other than
+    device-busy `20072`) → `4009` with `device_errno=error_number`. Warning
+    log now includes the errno and message.
+  - `IrisCcdConnector`: device-replied `RuntimeError` on `get`/`put`/`call`
+    → `4009` (was `2002`).
+  - Pilar's device-reply path is **not** converted yet (its `get` re-raises
+    raw `RuntimeError`, `put` returns a `{"status": "failed"}` dict) — tracked
+    as a follow-up; see `doc/errors.md` "Device-reported errors".
+### Dependencies
+- Requires ocabox-common ≥ `1.1.2`, which registers the 4009 code description
+  (dependency tracks git `master`; 4009 still functions without it — the
+  description lookup just degrades to empty).
 
 ## [2.3.15]
 ### Fixed
