@@ -5,6 +5,7 @@ import logging
 from typing import Iterable, Callable, Tuple
 
 from aiohttp import ServerConnectionError, ClientConnectionError
+from aiohttp.resolver import DefaultResolver
 from obcom.data_colection.address import AddressError
 from obcom.data_colection.coded_error import TreeOtherError
 from obcom.data_colection.value import TreeValueError
@@ -18,6 +19,27 @@ logger = logging.getLogger(__name__.rsplit('.')[-1])
 # Vendor SDK error codes that map to TreeOtherError(4008) "device busy".
 # 20072 = Andor DRV_ACQUIRING (acquisition in progress).
 _DEVICE_BUSY_ERRNOS = frozenset({20072})
+
+# --- HTTP session tuning -----------------------------------------------------
+# A single long-lived ClientSession per connector (instead of a fresh session per
+# request) gives us HTTP keep-alive and a connector-level DNS cache. Together they
+# collapse the per-request getaddrinfo storm that used to saturate the resolver
+# thread-pool: a brief DNS hiccup on the upstream server would block every poll and
+# the process never recovered without a restart. See doc/errors.md and the
+# DNS-instability report for the full failure analysis.
+#
+# Per-request timeout. aiohttp's default is 5 minutes, which lets a slow/hung
+# resolve or connect occupy a connection (and a resolver thread) far too long.
+# ALPACA telemetry resolves in well under a second; 10s total / 5s connect is
+# generous but bounded.
+_DEFAULT_TIMEOUT = aiohttp.ClientTimeout(total=10.0, connect=5.0, sock_connect=5.0)
+# Cap concurrent connections to a single ALPACA host. Keeps the per-host driver
+# queue shallow (also mitigates the ASCOM filterwheel "code=1026" queue-depth
+# timeouts) while leaving ample parallelism for normal telemetry polling.
+_DEFAULT_LIMIT_PER_HOST = 8
+# Connector-level DNS cache lifetime (seconds). Resolutions are reused for this
+# long instead of hitting the resolver on every request.
+_DEFAULT_DNS_CACHE_TTL = 30
 
 
 class Connector:
@@ -46,11 +68,14 @@ class AlpacaConnector(Connector):
         self.session_id = 0
         self._session_loop = None
         self._http_session: aiohttp.ClientSession or None = None
+        # Guards lazy creation of the shared session so concurrent first requests
+        # don't each spin up their own. Bound to the running loop on first await.
+        self._session_lock = asyncio.Lock()
         logger.info('Alpaca connector created, ClientId=%d', self.client_id)
         super().__init__(**kwargs)
 
     def _create_permanent_http_session(self, loop=None) -> None or aiohttp.ClientSession:
-        if self._http_session:
+        if self._http_session and not self._http_session.closed:
             logger.warning(f"One session is already exist, close it before create a new one.")
             return self._http_session
         if loop:
@@ -61,7 +86,34 @@ class AlpacaConnector(Connector):
             except RuntimeError:
                 logger.error(f"Can not create permanent session because can not find running async loop")
                 return None
-        self._http_session = aiohttp.ClientSession(loop=self._session_loop)
+        # The TCPConnector binds to the running loop; keep-alive + DNS cache live here.
+        # DefaultResolver is the async (c-ares) resolver when aiodns is installed,
+        # falling back to the blocking ThreadedResolver otherwise.
+        connector = aiohttp.TCPConnector(
+            limit_per_host=_DEFAULT_LIMIT_PER_HOST,
+            use_dns_cache=True,
+            ttl_dns_cache=_DEFAULT_DNS_CACHE_TTL,
+        )
+        self._http_session = aiohttp.ClientSession(connector=connector, timeout=_DEFAULT_TIMEOUT)
+        logger.info("Alpaca HTTP session created (limit_per_host=%d, ttl_dns_cache=%.0fs, "
+                    "timeout=%.0fs/connect=%.0fs, resolver=%s)",
+                    _DEFAULT_LIMIT_PER_HOST, _DEFAULT_DNS_CACHE_TTL,
+                    _DEFAULT_TIMEOUT.total, _DEFAULT_TIMEOUT.connect, DefaultResolver.__name__)
+        return self._http_session
+
+    async def _ensure_session(self) -> aiohttp.ClientSession or None:
+        """Return the shared HTTP session, creating it lazily on first use.
+
+        Connectors are built synchronously at tree-build time (no running loop),
+        so the session can only be created once requests start flowing inside the
+        loop. The lock collapses a thundering-herd of concurrent first requests
+        into a single session creation.
+        """
+        if self._http_session is not None and not self._http_session.closed:
+            return self._http_session
+        async with self._session_lock:
+            if self._http_session is None or self._http_session.closed:
+                self._create_permanent_http_session()
         return self._http_session
 
     def create_http_session_sync(self, loop):
@@ -203,12 +255,9 @@ class AlpacaConnector(Connector):
                 return r
 
         data.update(self._base_data_for_request())
+        session = await self._ensure_session()
         try:
-            if self._http_session:
-                resp = await get_response(self._http_session)
-            else:
-                async with aiohttp.ClientSession() as session:
-                    resp = await get_response(session)
+            resp = await get_response(session)
         except IOError as exc:
             logger.error(f'Connection to {url} failed')
             raise RequestConnectionError from exc
@@ -339,12 +388,9 @@ class AlpacaConnector(Connector):
                 return r
 
         data.update(self._base_data_for_request())
+        session = await self._ensure_session()
         try:
-            if self._http_session:
-                resp = await get_response(self._http_session)
-            else:
-                async with aiohttp.ClientSession() as session:
-                    resp = await get_response(session)
+            resp = await get_response(session)
         except IOError as exc:
             logger.error(f'Connection to {url} failed')
             raise RequestConnectionError from exc
