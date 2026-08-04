@@ -2,6 +2,46 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Added
+- **Mirror cell (M1 support / active collimation) component** — new component
+  kind `mirrorcell` (interface contract) plus the ASA implementation
+  `mirrorcellACC`. All reads are served by the single vendor action
+  `mirrorcell_info` and decomposed into GET-able (hence cacheable/subscribable)
+  attributes: `mirrorcellstatus` (raw dict), `available`, `positions` (metres —
+  µm-scale in practice), `motorstatuses`, `motorstatustexts`, `atsetpoint`,
+  `moving`. Commands: `moveallmotorsto`, `moveallmotorsoffset`,
+  `moveonemotoroffset`, `stoponemotor`, `stopallmotors`.
+  - The mirror cell is **not an ALPACA device** — its actions live on the ASA
+    **ACC focuser**, so requests are routed with `kind=focuser` (the same trick
+    as `CoverCalibratorOCA`) and the component's own `device_number` selects the
+    focuser (`0` on OCM).
+  - ACC replies are **double-encoded** (the ALPACA envelope's `Value` is a JSON
+    *string*); unwrapped here so clients get real dicts/lists.
+  - Verified live 2026-08-04 (read-only): mirror cell available on **jk15** and
+    **zb08** (3 motors, all `Stopped`), `Available: false` on **wk06**.
+    Movement paths are unit-tested only — no move has been commanded on hardware.
+- **Error model** follows `Tertiary`: a motor fault status (`Invalid`,
+  `TimeoutPositionControl`, `MovingError`, `TemperatureMotorAboveLimit`,
+  `HbridgeOpen`, `NoPositionInfo`, `PositionLimitViolation`) raises
+  `TreeOtherError(4009, NORMAL)` carrying `device_errno` on every decomposed
+  read, while `mirrorcellstatus` stays the raw diagnostic view and `available`
+  stays a never-raising capability probe. A telescope without the subsystem
+  raises `TreeValueError(2002, CRITICAL)` — permanent, so SERVICE-policy
+  subscribers stop instead of retrying forever. Commands validate `Index`
+  (0…2) and the per-motor value lists, raising `TreeOtherError(4007, NORMAL)`
+  before anything is sent; a non-`ok` vendor acknowledgement becomes `4009`.
+- Base `MirrorCell` is an explicit interface contract — every method raises
+  `TreeStructureError(3002, CRITICAL)`, so a tree configured with the plain
+  `mirrorcell` kind fails loudly instead of reaching a nonexistent ALPACA
+  endpoint. 34 unit tests cover the contract, reads, faults, malformed replies,
+  command payloads and parameter validation.
+
+  Config sketch (`ocabox-config-ocm`, as a child of the telescope):
+  ```yaml
+  mirrorcell:
+    kind: mirrorcellACC
+    device_number: 0        # the ACC focuser that carries the actions
+  ```
 
 ## [2.3.18]
 ### Added
