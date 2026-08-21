@@ -1,6 +1,7 @@
 import functools
 import json
 import logging
+import math
 import re
 from datetime import datetime
 from typing import Optional, Union, List, MutableMapping, Dict, Coroutine, Callable
@@ -975,13 +976,28 @@ class MirrorCellACC(MirrorCell):
             device_errno=self._status_code(motor))
 
     def _index(self, motor: dict) -> int:
-        return int(self._require_field(motor, 'Index'))
+        return self._reply_number(self._require_field(motor, 'Index'), 'Index', int)
 
     def _position(self, motor: dict) -> float:
-        return float(self._require_field(self._require_field(motor, 'Position'), 'Value'))
+        return self._reply_number(
+            self._require_field(self._require_field(motor, 'Position'), 'Value'),
+            'Position.Value', float)
 
     def _status_code(self, motor: dict) -> int:
-        return int(self._require_field(self._require_field(motor, 'Status'), 'Value'))
+        return self._reply_number(
+            self._require_field(self._require_field(motor, 'Status'), 'Value'),
+            'Status.Value', int)
+
+    def _reply_number(self, value, field: str, convert):
+        """Convert a numeric field of the vendor reply, translating garbage to 2002."""
+        try:
+            return convert(value)
+        except (TypeError, ValueError):
+            raise TreeValueError(
+                address=None, code=2002,
+                message=f"Field {field!r} in ACC {self.ACTION_PREFIX} reply "
+                        f"is not a number: {value!r}",
+                severity=TreeValueError.SEVERITY_NORMAL) from None
 
     def _status_text(self, motor: dict) -> str:
         """Status name, preferring the vendor's own text over the local enum."""
@@ -999,6 +1015,10 @@ class MirrorCellACC(MirrorCell):
 
     def _require_index(self, index) -> int:
         try:
+            # bool is an int subclass and float truncation would silently pick
+            # the wrong motor (int(1.9) == 1) — both must fail, not convert.
+            if isinstance(index, bool) or (isinstance(index, float) and not index.is_integer()):
+                raise ValueError
             index = int(index)
         except (TypeError, ValueError):
             raise TreeOtherError(
@@ -1014,7 +1034,11 @@ class MirrorCellACC(MirrorCell):
 
     def _require_float(self, value, name: str) -> float:
         try:
-            return float(value)
+            # bool would convert to a 1-metre command on a µm-scale actuator;
+            # NaN/±inf would even serialize as nonstandard JSON tokens.
+            if isinstance(value, bool) or not math.isfinite(number := float(value)):
+                raise ValueError
+            return number
         except (TypeError, ValueError):
             raise TreeOtherError(
                 address=None, code=4007,

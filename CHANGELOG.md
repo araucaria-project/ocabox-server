@@ -40,12 +40,17 @@ All notable changes to this project will be documented in this file.
   `available` stays a never-raising capability probe. A telescope without the subsystem
   raises `TreeValueError(2002, CRITICAL)` — permanent, so SERVICE-policy
   subscribers stop instead of retrying forever. Commands validate `Index`
-  (0…2) and the per-motor value lists, raising `TreeOtherError(4007, NORMAL)`
-  before anything is sent; a non-`ok` vendor acknowledgement becomes `4009`.
+  (0…2, rejecting booleans and truncating floats — `1.9` must not actuate
+  motor 1) and the per-motor movement values (finite numbers only: `True`
+  would convert to a 1-metre command on a µm-scale actuator, NaN/±inf would
+  serialize as nonstandard JSON), raising `TreeOtherError(4007, NORMAL)`
+  before anything is sent; a non-`ok` vendor acknowledgement becomes `4009`;
+  non-numeric fields in the vendor reply translate to `2002` instead of
+  leaking a raw `ValueError`.
 - Base `MirrorCell` is an explicit interface contract — every method raises
   `TreeStructureError(3002, CRITICAL)`, so a tree configured with the plain
   `mirrorcell` kind fails loudly instead of reaching a nonexistent ALPACA
-  endpoint. 41 unit tests cover the contract, reads (aggregate and per-motor),
+  endpoint. 44 unit tests cover the contract, reads (aggregate and per-motor),
   faults and fault isolation, the HbridgeOpen idle state, malformed replies,
   command payloads and parameter validation.
 

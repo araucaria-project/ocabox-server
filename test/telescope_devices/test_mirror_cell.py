@@ -373,6 +373,23 @@ class MirrorCellACCMalformedReplyTest(unittest.IsolatedAsyncioTestCase):
             await device.positions()
         self.assertEqual(ctx.exception.code, 2002)
 
+    async def test_non_numeric_motor_field_is_2002(self):
+        """Garbage in a numeric field is translated, never a leaked ValueError."""
+        device = _make_cell()
+        cases = [
+            ('positions', _motor(0, "abc", 9, "Stopped")),
+            ('motorstatuses', {"Index": 0, "Position": {"Value": 0.0, "Unit": "m"},
+                               "Status": {"Value": "??", "Text": "Stopped"}}),
+            ('positions', {"Index": "zero", "Position": {"Value": 0.0, "Unit": "m"},
+                           "Status": {"Value": 9, "Text": "Stopped"}}),
+        ]
+        for method, motor in cases:
+            with self.subTest(method=method, motor=motor):
+                device._connector.put.return_value = _reply({"Available": True, "Motors": [motor]})
+                with self.assertRaises(TreeValueError) as ctx:
+                    await getattr(device, method)()
+                self.assertEqual(ctx.exception.code, 2002)
+
 
 class MirrorCellACCCommandsTest(unittest.IsolatedAsyncioTestCase):
     """Movement/stop actions: payload shape, acknowledgement and validation.
@@ -393,6 +410,19 @@ class MirrorCellACCCommandsTest(unittest.IsolatedAsyncioTestCase):
             "Positions": [{"Value": 1e-06, "Unit": "m"},
                           {"Value": -2e-06, "Unit": "m"},
                           {"Value": 3e-06, "Unit": "m"}],
+        })
+
+    async def test_move_all_motors_offset_payload(self):
+        device = _make_cell()
+        device._connector.put.return_value = "ok"
+        await device.moveallmotorsoffset_put(Offsets=[5e-06, 0.0, -5e-06])
+        _, kwargs = device._connector.put.call_args
+        self.assertEqual(kwargs['kind'], Focuser.KIND)
+        self.assertEqual(kwargs['Action'], 'mirrorcell_move_all_motors_offset')
+        self.assertEqual(json.loads(kwargs['Parameters']), {
+            "Offsets": [{"Value": 5e-06, "Unit": "m"},
+                        {"Value": 0.0, "Unit": "m"},
+                        {"Value": -5e-06, "Unit": "m"}],
         })
 
     async def test_move_one_motor_offset_payload(self):
@@ -437,7 +467,9 @@ class MirrorCellACCCommandsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_bad_index_is_4007_and_sends_nothing(self):
         device = _make_cell()
-        for bad in ('x', None, -1, 3, 99):
+        # 1.9 would truncate to motor 1, True would convert to motor 1 —
+        # both must refuse before anything reaches the wire.
+        for bad in ('x', None, -1, 3, 99, 1.9, '1.9', True):
             with self.subTest(index=bad):
                 device._connector.put.reset_mock()
                 with self.assertRaises(TreeOtherError) as ctx:
@@ -456,10 +488,24 @@ class MirrorCellACCCommandsTest(unittest.IsolatedAsyncioTestCase):
                 device._connector.put.assert_not_awaited()
 
     async def test_non_numeric_offset_is_4007(self):
+        """Booleans (float(True) = a 1-metre move!) and non-finite floats —
+        which json.dumps would even emit as nonstandard NaN/Infinity tokens —
+        must refuse before anything reaches the wire."""
         device = _make_cell()
-        with self.assertRaises(TreeOtherError) as ctx:
-            await device.moveonemotoroffset_put(Index=0, Offset='nudge')
-        self.assertEqual(ctx.exception.code, 4007)
+        for bad in ('nudge', None, True, False, float('nan'), float('inf'), float('-inf')):
+            with self.subTest(offset=bad):
+                with self.assertRaises(TreeOtherError) as ctx:
+                    await device.moveonemotoroffset_put(Index=0, Offset=bad)
+                self.assertEqual(ctx.exception.code, 4007)
+        device._connector.put.assert_not_awaited()
+
+    async def test_non_finite_position_in_list_is_4007(self):
+        device = _make_cell()
+        for bad in ([0.0, float('nan'), 0.0], [0.0, 0.0, True]):
+            with self.subTest(positions=bad):
+                with self.assertRaises(TreeOtherError) as ctx:
+                    await device.moveallmotorsto_put(Positions=bad)
+                self.assertEqual(ctx.exception.code, 4007)
         device._connector.put.assert_not_awaited()
 
     async def test_int_like_strings_are_accepted(self):
