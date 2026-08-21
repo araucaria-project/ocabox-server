@@ -15,3 +15,4 @@ class StandardTelescopeComponents:
     SAFETYMONITOR = "safetymonitor"
     COVERCALIBRATOR = "covercalibrator"
     TERTIARY = "tertiary"
+    MIRRORCELL = "mirrorcell"

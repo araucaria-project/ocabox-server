@@ -1,5 +1,8 @@
+import functools
 import json
 import logging
+import math
+import re
 from datetime import datetime
 from typing import Optional, Union, List, MutableMapping, Dict, Coroutine, Callable
 
@@ -605,6 +608,460 @@ class TertiaryOCA(Tertiary):
                 severity=TreeValueError.SEVERITY_NORMAL) from None
 
 
+class MirrorCell(Device):
+    """Mirror cell (M1 support / active collimation) — interface contract.
+
+    ALPACA has no mirror-cell device type; the hardware is driven through
+    vendor ``Action`` commands on the ASA ACC focuser (see ``MirrorCellACC``).
+    The base class declares the interface and every method raises ``3002`` so
+    a tree configured with the plain ``mirrorcell`` kind fails loudly instead
+    of falling through to a nonexistent ALPACA endpoint.
+
+    Attributes (GET): ``available``, ``mirrorcellstatus`` (raw vendor dict),
+    and its decomposed fields ``positions``, ``motorstatuses``,
+    ``motorstatustexts``, ``atsetpoint``, ``moving``, plus per-motor scalars
+    ``motor<N>position``, ``motor<N>status``, ``motor<N>statustext``
+    (``N`` = 0…``MOTOR_COUNT``-1) so telemetry can subscribe to one value per
+    subject (the TimescaleDB pipeline stores one number per ``(subject,
+    metric)`` — a list attribute cannot land there).
+    Attributes (PUT): ``moveallmotorsto``, ``moveallmotorsoffset``,
+    ``moveonemotoroffset``, ``stoponemotor``, ``stopallmotors``.
+
+    Error-model contract (mirrors ``Tertiary``): a motor fault must surface as
+    ``TreeOtherError(4009)`` "device reported an error" on every *value* read
+    (``positions``, ``atsetpoint``, ``moving``, ``motor<N>position``) — never
+    as a readable boolean — with per-motor position reads faulting only on
+    *their own* motor, so one bad motor does not blind telemetry for the other
+    two. *Status* reads (``mirrorcellstatus``, ``motorstatuses``,
+    ``motorstatustexts``, ``motor<N>status``, ``motor<N>statustext``) stay
+    readable while faulted: the status enum IS the fault channel, and raising
+    on it would keep the fault code out of the telemetry time-series exactly
+    when an alert needs it. ``available`` stays a plain capability probe.
+    """
+    KIND = StandardTelescopeComponents.MIRRORCELL
+
+    #: Number of mirror-cell motors (vendor ``Index`` is 0-based: 0…2).
+    MOTOR_COUNT = 3
+
+    #: Vendor motor-status enum, shared by mirror cell and image plane.
+    STATUS_TEXTS = {
+        0: 'Invalid',
+        1: 'MovingToSetpoint',
+        2: 'TimeoutPositionControl',
+        3: 'AtSetpoint',
+        4: 'SpeedCtrlActive',
+        5: 'MovingError',
+        6: 'TemperatureMotorAboveLimit',
+        7: 'MovingForward',
+        8: 'MovingReverse',
+        9: 'Stopped',
+        10: 'HbridgeOpen',
+        11: 'NoPositionInfo',
+        12: 'PositionLimitViolation',
+    }
+    #: Statuses meaning the motor/controller is faulted → 4009 on value reads.
+    #: ``HbridgeOpen`` (10) is deliberately NOT here: it is the normal idle
+    #: state — drive bridge disengaged, position still valid from the encoder.
+    #: Verified live 2026-08-19: all six motors on jk15 and zb08 sat in
+    #: ``HbridgeOpen`` with sane, continuous positions (they reported
+    #: ``Stopped`` on 2026-08-04) — treating it as a fault would make every
+    #: value read raise 4009 during routine operation.
+    FAULT_STATUSES = frozenset({0, 2, 5, 6, 11, 12})
+    #: Statuses meaning the motor is in motion.
+    MOVING_STATUSES = frozenset({1, 4, 7, 8})
+    #: Status meaning the motor holds its commanded position.
+    AT_SETPOINT_STATUS = 3
+
+    #: Grammar of the per-motor scalar GET attributes, resolved by
+    #: ``_find_attribute`` to the ``_motor_*`` template methods.
+    _PER_MOTOR_RE = re.compile(r'motor(\d+)(position|status|statustext)$')
+
+    def _find_attribute(self, attribute):
+        match = self._PER_MOTOR_RE.fullmatch(attribute)
+        if match:
+            index, field = int(match.group(1)), match.group(2)
+            return functools.partial(getattr(self, f'_motor_{field}'), index)
+        return super()._find_attribute(attribute)
+
+    def _not_implemented(self, method: str):
+        raise TreeStructureError(
+            code=3002,
+            message=f"Method {method!r} is not implemented on {type(self).__name__} "
+                    f"({self.sys_id}); use a vendor-specific mirror-cell kind (e.g. 'mirrorcellACC')",
+            severity=TreeStructureError.SEVERITY_CRITICAL,
+        )
+
+    async def available(self, **kwargs):
+        """True when the controller reports mirror-cell support (bool).
+
+        A capability probe: it must stay readable (never raise on device state)
+        so a client can ask before subscribing to the rest.
+        """
+        self._not_implemented('available')
+
+    async def mirrorcellstatus(self, **kwargs):
+        """Full raw status as dict: ``Available`` and ``Motors`` (see vendor doc)."""
+        self._not_implemented('mirrorcellstatus')
+
+    async def positions(self, **kwargs):
+        """Motor positions in **metres**, ordered by motor index (list[float])."""
+        self._not_implemented('positions')
+
+    async def motorstatuses(self, **kwargs):
+        """Motor status codes, ordered by motor index (list[int]).
+
+        A status read: stays readable while a motor is faulted — the code is
+        the fault channel itself.
+        """
+        self._not_implemented('motorstatuses')
+
+    async def motorstatustexts(self, **kwargs):
+        """Motor status names, ordered by motor index (list[str]).
+
+        A status read: stays readable while a motor is faulted.
+        """
+        self._not_implemented('motorstatustexts')
+
+    async def _motor_position(self, index: int, **kwargs):
+        """Position of one motor in **metres** (float); serves ``motor<N>position``.
+
+        Faults only on *its own* motor's fault status.
+        """
+        self._not_implemented(f'motor{index}position')
+
+    async def _motor_status(self, index: int, **kwargs):
+        """Status code of one motor (int); serves ``motor<N>status``.
+
+        A status read: stays readable while faulted.
+        """
+        self._not_implemented(f'motor{index}status')
+
+    async def _motor_statustext(self, index: int, **kwargs):
+        """Status name of one motor (str); serves ``motor<N>statustext``.
+
+        A status read: stays readable while faulted.
+        """
+        self._not_implemented(f'motor{index}statustext')
+
+    async def atsetpoint(self, **kwargs):
+        """True when every motor holds its commanded position (bool)."""
+        self._not_implemented('atsetpoint')
+
+    async def moving(self, **kwargs):
+        """True while any motor is in motion (bool)."""
+        self._not_implemented('moving')
+
+    async def moveallmotorsto_put(self, **kwargs):
+        """Move all motors to absolute positions. Parameter: ``Positions`` (metres)."""
+        self._not_implemented('moveallmotorsto')
+
+    async def moveallmotorsoffset_put(self, **kwargs):
+        """Move all motors by relative offsets. Parameter: ``Offsets`` (metres)."""
+        self._not_implemented('moveallmotorsoffset')
+
+    async def moveonemotoroffset_put(self, **kwargs):
+        """Move one motor by a relative offset. Parameters: ``Index`` (int), ``Offset`` (metres)."""
+        self._not_implemented('moveonemotoroffset')
+
+    async def stoponemotor_put(self, **kwargs):
+        """Stop one motor. Parameter: ``Index`` (int)."""
+        self._not_implemented('stoponemotor')
+
+    async def stopallmotors_put(self, **kwargs):
+        """Stop all motors."""
+        self._not_implemented('stopallmotors')
+
+
+class MirrorCellACC(MirrorCell):
+    """ASA ACC mirror cell, driven through the ACC *focuser*'s ALPACA action channel.
+
+    All reads are served by the single vendor action ``mirrorcell_info``
+    (``{"Available": bool, "Motors": [{"Index", "Position": {"Value", "Unit"},
+    "Status": {"Value", "Text"}}]}``); movement and stops by the
+    ``mirrorcell_move_*`` / ``mirrorcell_stop_*`` actions.
+
+    Wiring notes (verified on OCM 2026-08-04, ASCOM Remote Server 6.6.8419):
+
+    * The mirror cell is **not its own ALPACA device** — the actions live on the
+      ACC focuser, so every request is routed with ``kind=Focuser.KIND`` (the
+      same trick as ``CoverCalibratorOCA``). The component's own
+      ``device_number`` selects which focuser; on OCM that is ``0``.
+    * The action reply is **double-encoded**: the ALPACA envelope's ``Value`` is
+      a *string* containing JSON, hence the explicit ``json.loads`` here.
+    * Positions are metres and physically µm-scale (``-9.63e-05`` = −96.3 µm).
+      They are passed through unconverted — scaling belongs in whatever
+      publishes telemetry, not in the tree.
+    * Reads use ``ConvertPositionToAlpacaFocuserValue: false`` (native hardware
+      units). The ``true`` variant returns the same reading offset by +1 mm
+      while still reporting ``Unit: "m"``, so the flag — not the unit field —
+      decides the convention; the tree deliberately exposes one convention.
+    * ``mirrorcell_stop_all_motors`` is spelled with the trailing ``s`` (the
+      vendor doc drops it in one place; the driver's ``supportedactions`` has it).
+
+    The image plane exposes a byte-identical API under the ``imageplane_``
+    prefix, so it becomes a subclass overriding ``ACTION_PREFIX`` once hardware
+    reports it available (on OCM it currently reports ``Available: false``).
+    """
+
+    #: Vendor action prefix; ``imageplane`` shares the identical payload contract.
+    ACTION_PREFIX = 'mirrorcell'
+
+    async def available(self, **kwargs):
+        info = await self._info()
+        return bool(info.get('Available'))
+
+    async def mirrorcellstatus(self, **kwargs):
+        return await self._info()
+
+    async def positions(self, **kwargs):
+        return [self._position(m) for m in await self._motors()]
+
+    async def motorstatuses(self, **kwargs):
+        return [self._status_code(m) for m in await self._motors_raw()]
+
+    async def motorstatustexts(self, **kwargs):
+        return [self._status_text(m) for m in await self._motors_raw()]
+
+    async def atsetpoint(self, **kwargs):
+        return all(self._status_code(m) == self.AT_SETPOINT_STATUS for m in await self._motors())
+
+    async def moving(self, **kwargs):
+        return any(self._status_code(m) in self.MOVING_STATUSES for m in await self._motors())
+
+    async def _motor_position(self, index: int, **kwargs):
+        motor = await self._motor(index)
+        if self._status_code(motor) in self.FAULT_STATUSES:
+            self._raise_fault(motor)
+        return self._position(motor)
+
+    async def _motor_status(self, index: int, **kwargs):
+        return self._status_code(await self._motor(index))
+
+    async def _motor_statustext(self, index: int, **kwargs):
+        return self._status_text(await self._motor(index))
+
+    async def moveallmotorsto_put(self, **kwargs):
+        """Move all motors to absolute positions. Parameter: ``Positions`` (metres)."""
+        positions = self._require_motor_values(kwargs.get('Positions'), 'Positions')
+        return await self._command(
+            'move_all_motors_to',
+            PositionIsAlpacaFocuserValue=False,
+            Positions=[{"Value": v, "Unit": "m"} for v in positions],
+        )
+
+    async def moveallmotorsoffset_put(self, **kwargs):
+        """Move all motors by relative offsets. Parameter: ``Offsets`` (metres)."""
+        offsets = self._require_motor_values(kwargs.get('Offsets'), 'Offsets')
+        return await self._command(
+            'move_all_motors_offset',
+            Offsets=[{"Value": v, "Unit": "m"} for v in offsets],
+        )
+
+    async def moveonemotoroffset_put(self, **kwargs):
+        """Move one motor by a relative offset. Parameters: ``Index`` (int), ``Offset`` (metres)."""
+        index = self._require_index(kwargs.get('Index'))
+        offset = self._require_float(kwargs.get('Offset'), 'Offset')
+        return await self._command(
+            'move_one_motor_offset',
+            Index=index,
+            Offset={"Value": offset, "Unit": "m"},
+        )
+
+    async def stoponemotor_put(self, **kwargs):
+        """Stop one motor. Parameter: ``Index`` (int)."""
+        index = self._require_index(kwargs.get('Index'))
+        return await self._command('stop_one_motor', Index=index)
+
+    async def stopallmotors_put(self, **kwargs):
+        """Stop all motors. Takes no parameters (vendor expects an empty string)."""
+        action = f'{self.ACTION_PREFIX}_stop_all_motors'
+        return self._verify_ack(action, await self._action(action, ''))
+
+    # --- vendor plumbing -----------------------------------------------------
+
+    async def _action(self, action: str, parameters: str):
+        """Send one ACC action on the focuser device and return its raw reply."""
+        return await self._put("action", kind=Focuser.KIND, Action=action, Parameters=parameters)
+
+    async def _command(self, suffix: str, **parameters):
+        """Send an actuating action and verify the vendor acknowledgement."""
+        action = f'{self.ACTION_PREFIX}_{suffix}'
+        return self._verify_ack(action, await self._action(action, json.dumps(parameters)))
+
+    def _verify_ack(self, action: str, ret):
+        """The driver answers ``"ok"`` on success, an error message otherwise.
+
+        A non-``ok`` reply is a device refusal, so it becomes 4009 instead of
+        being returned as if the motion had been accepted.
+        """
+        if str(ret).strip().lower() != 'ok':
+            raise TreeOtherError(
+                address=None, code=4009,
+                message=f"ACC refused {action} on {self.sys_id}: {ret!r}",
+                severity=TreeOtherError.SEVERITY_NORMAL)
+        return ret
+
+    async def _info(self) -> dict:
+        raw = await self._action(
+            f'{self.ACTION_PREFIX}_info',
+            json.dumps({"ConvertPositionToAlpacaFocuserValue": False}))
+        try:
+            info = json.loads(raw)
+        except (TypeError, ValueError):
+            raise TreeValueError(
+                address=None, code=2002,
+                message=f"Unparsable {self.ACTION_PREFIX}_info reply from ACC: {raw!r}",
+                severity=TreeValueError.SEVERITY_NORMAL) from None
+        if not isinstance(info, dict):
+            raise TreeValueError(
+                address=None, code=2002,
+                message=f"Expected a JSON object from {self.ACTION_PREFIX}_info, got {info!r}",
+                severity=TreeValueError.SEVERITY_NORMAL)
+        return info
+
+    async def _motors_raw(self) -> List[dict]:
+        """Motors of an available mirror cell, ordered by motor index — no fault gate.
+
+        Serves the status reads, which must stay readable while a motor is
+        faulted. Raises 2002/CRITICAL when the subsystem is absent — permanent
+        for that telescope, so a SERVICE-policy subscriber stops instead of
+        retrying forever.
+        """
+        info = await self._info()
+        if not info.get('Available'):
+            raise TreeValueError(
+                address=None, code=2002,
+                message=f"Mirror cell is not available on {self.sys_id} "
+                        f"(ACC reports Available=false); read 'available' to probe "
+                        f"capability without raising",
+                severity=TreeValueError.SEVERITY_CRITICAL)
+        motors = info.get('Motors')
+        if not isinstance(motors, list) or not motors:
+            raise TreeValueError(
+                address=None, code=2002,
+                message=f"ACC reports the mirror cell available but sent no motors: {info!r}",
+                severity=TreeValueError.SEVERITY_NORMAL)
+        return sorted(motors, key=self._index)
+
+    async def _motors(self) -> List[dict]:
+        """Motors of a healthy, available mirror cell — the value-read gate.
+
+        On top of ``_motors_raw``, raises 4009/NORMAL when any motor reports a
+        fault: an aggregate value composed over a faulted motor would
+        masquerade as healthy data.
+        """
+        motors = await self._motors_raw()
+        faulted = [m for m in motors if self._status_code(m) in self.FAULT_STATUSES]
+        if faulted:
+            self._raise_fault(faulted[0], context=motors)
+        return motors
+
+    async def _motor(self, index: int) -> dict:
+        """One motor by vendor ``Index`` — no fault gate (callers decide)."""
+        index = self._require_index(index)
+        for motor in await self._motors_raw():
+            if self._index(motor) == index:
+                return motor
+        raise TreeValueError(
+            address=None, code=2002,
+            message=f"Mirror-cell motor {index} missing in ACC reply on {self.sys_id}",
+            severity=TreeValueError.SEVERITY_NORMAL)
+
+    def _raise_fault(self, motor: dict, context=None):
+        raise TreeOtherError(
+            address=None, code=4009,
+            message=f"Mirror-cell motor {self._index(motor)} on {self.sys_id} reports "
+                    f"{self._status_text(motor)!r}; status: {context if context is not None else motor!r}",
+            severity=TreeOtherError.SEVERITY_NORMAL,
+            device_errno=self._status_code(motor))
+
+    def _index(self, motor: dict) -> int:
+        return self._reply_number(self._require_field(motor, 'Index'), 'Index', int)
+
+    def _position(self, motor: dict) -> float:
+        return self._reply_number(
+            self._require_field(self._require_field(motor, 'Position'), 'Value'),
+            'Position.Value', float)
+
+    def _status_code(self, motor: dict) -> int:
+        return self._reply_number(
+            self._require_field(self._require_field(motor, 'Status'), 'Value'),
+            'Status.Value', int)
+
+    def _reply_number(self, value, field: str, convert):
+        """Convert a numeric field of the vendor reply, translating garbage to 2002."""
+        try:
+            return convert(value)
+        except (TypeError, ValueError):
+            raise TreeValueError(
+                address=None, code=2002,
+                message=f"Field {field!r} in ACC {self.ACTION_PREFIX} reply "
+                        f"is not a number: {value!r}",
+                severity=TreeValueError.SEVERITY_NORMAL) from None
+
+    def _status_text(self, motor: dict) -> str:
+        """Status name, preferring the vendor's own text over the local enum."""
+        status = self._require_field(motor, 'Status')
+        text = status.get('Text') if isinstance(status, dict) else None
+        return str(text) if text else self.STATUS_TEXTS.get(self._status_code(motor), 'Unknown')
+
+    def _require_field(self, source, field: str):
+        if not isinstance(source, dict) or field not in source:
+            raise TreeValueError(
+                address=None, code=2002,
+                message=f"Field {field!r} missing in ACC {self.ACTION_PREFIX} reply: {source!r}",
+                severity=TreeValueError.SEVERITY_NORMAL)
+        return source[field]
+
+    def _require_index(self, index) -> int:
+        try:
+            # bool is an int subclass and float truncation would silently pick
+            # the wrong motor (int(1.9) == 1) — both must fail, not convert.
+            if isinstance(index, bool) or (isinstance(index, float) and not index.is_integer()):
+                raise ValueError
+            index = int(index)
+        except (TypeError, ValueError):
+            raise TreeOtherError(
+                address=None, code=4007,
+                message=f"Mirror-cell commands require an integer 'Index', got {index!r}",
+                severity=TreeOtherError.SEVERITY_NORMAL) from None
+        if not 0 <= index < self.MOTOR_COUNT:
+            raise TreeOtherError(
+                address=None, code=4007,
+                message=f"Mirror-cell motor 'Index' must be 0..{self.MOTOR_COUNT - 1}, got {index}",
+                severity=TreeOtherError.SEVERITY_NORMAL)
+        return index
+
+    def _require_float(self, value, name: str) -> float:
+        try:
+            # bool would convert to a 1-metre command on a µm-scale actuator;
+            # NaN/±inf would even serialize as nonstandard JSON tokens.
+            if isinstance(value, bool) or not math.isfinite(number := float(value)):
+                raise ValueError
+            return number
+        except (TypeError, ValueError):
+            raise TreeOtherError(
+                address=None, code=4007,
+                message=f"Mirror-cell commands require a number for {name!r} (metres), "
+                        f"got {value!r}",
+                severity=TreeOtherError.SEVERITY_NORMAL) from None
+
+    def _require_motor_values(self, values, name: str) -> List[float]:
+        if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
+            raise TreeOtherError(
+                address=None, code=4007,
+                message=f"{name!r} must be a list of {self.MOTOR_COUNT} numbers (metres), "
+                        f"got {values!r}",
+                severity=TreeOtherError.SEVERITY_NORMAL)
+        if len(values) != self.MOTOR_COUNT:
+            raise TreeOtherError(
+                address=None, code=4007,
+                message=f"{name!r} must hold exactly {self.MOTOR_COUNT} values "
+                        f"(one per motor), got {len(values)}",
+                severity=TreeOtherError.SEVERITY_NORMAL)
+        return [self._require_float(v, name) for v in values]
+
+
 _component_classes = {
     Telescope.KIND: Telescope,
     Dome.KIND: Dome,
@@ -618,4 +1075,6 @@ _component_classes = {
     Tertiary.KIND: Tertiary,  # here is a custom key, normally shou by Tertiary but its specific kind only for OCA!
     "tertiaryOCA": TertiaryOCA,  # here is a custom key !
     'covercalibratorOCA': CoverCalibratorOCA,  # here is a custom key !
+    MirrorCell.KIND: MirrorCell,  # interface contract only — raises 3002; use a vendor kind below
+    'mirrorcellACC': MirrorCellACC,  # ASA ACC mirror cell (actions on the ACC focuser)
 }

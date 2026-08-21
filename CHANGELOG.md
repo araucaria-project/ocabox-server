@@ -2,6 +2,36 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+...
+
+## [2.4.0]
+### Added
+- **Mirror cell (M1 / active collimation) component** — kinds `mirrorcell`
+  (interface contract; every method raises 3002 CRITICAL) and `mirrorcellACC`
+  (ASA: vendor actions on the ACC focuser, routed with `kind=focuser` like
+  `CoverCalibratorOCA`). GET-able (cacheable/subscribable) reads: `available`,
+  `mirrorcellstatus` (raw dict), `positions` (metres), `motorstatuses`,
+  `motorstatustexts`, `atsetpoint`, `moving`, plus per-motor scalars
+  `motor<N>{position,status,statustext}` (`N` = 0…2) for one-value-per-subject
+  telemetry. Commands: `moveallmotorsto`, `moveallmotorsoffset`,
+  `moveonemotoroffset`, `stoponemotor`, `stopallmotors` — **unit-tested only,
+  never commanded on hardware** (#31); reads verified live on jk15/zb08
+  (wk06 has no mirror cell). Details in the `MirrorCell`/`MirrorCellACC`
+  docstrings.
+- **Error model** follows `Tertiary`, with a value/status split: motor fault →
+  `4009 NORMAL` with `device_errno` on value reads (per-motor position faults
+  only on its own motor), while status reads stay readable — the status enum is
+  the fault channel; `HbridgeOpen` is normal idle, not a fault. Subsystem
+  absent → `2002 CRITICAL` (permanent); malformed vendor replies → `2002
+  NORMAL`; command parameters strictly validated (integer index, finite
+  values) → `4007` before anything is sent; non-`ok` acknowledgement → `4009`.
+
+  Config sketch (`ocabox-config-ocm`, as a child of the telescope):
+  ```yaml
+  mirrorcell:
+    kind: mirrorcellACC
+    device_number: 0        # the ACC focuser that carries the actions
+  ```
 
 ## [2.3.18]
 ### Added
