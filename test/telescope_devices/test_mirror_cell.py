@@ -10,11 +10,20 @@ cell is not an ALPACA device of its own), with all reads served by
 
 Error-model contract:
   * motor fault  → ``TreeOtherError(4009, NORMAL)`` carrying ``device_errno``
-    on every decomposed read, never a readable boolean;
+    on every decomposed *value* read (``positions``, ``atsetpoint``,
+    ``moving``, ``motor<N>position``), never a readable boolean; per-motor
+    position reads fault only on their own motor;
+  * *status* reads (``mirrorcellstatus``, ``motorstatuses``,
+    ``motorstatustexts``, ``motor<N>status``, ``motor<N>statustext``) stay
+    readable while faulted — the status enum is the fault channel, and it must
+    reach the telemetry time-series exactly when an alert needs it;
   * subsystem absent (``Available: false``, e.g. wk06) → ``TreeValueError(2002,
     CRITICAL)``, i.e. permanent, so SERVICE-policy subscribers stop instead of
-    retrying forever; ``available`` itself stays readable as a capability probe;
-  * ``mirrorcellstatus`` always returns the raw dict — the diagnostic view.
+    retrying forever; ``available`` itself stays readable as a capability probe.
+
+Per-motor scalar attributes (``motor0position`` … ``motor2statustext``) exist
+so telemetry can subscribe to one value per subject; they are resolved by
+``MirrorCell._find_attribute`` and therefore exercised through ``device.get()``.
 
 Payloads below are real replies captured from zb08-tcu / jk15-tcu on
 2026-08-04 (ASCOM Remote Server 6.6.8419, ACC Focuser device 0).
@@ -70,6 +79,8 @@ class MirrorCellBaseContractTest(unittest.IsolatedAsyncioTestCase):
 
     GETTERS = ['available', 'mirrorcellstatus', 'positions', 'motorstatuses',
                'motorstatustexts', 'atsetpoint', 'moving']
+    PER_MOTOR_GETTERS = [f'motor{i}{field}' for i in range(MirrorCell.MOTOR_COUNT)
+                         for field in ('position', 'status', 'statustext')]
 
     async def test_getters_raise_3002_critical(self):
         device = _make_cell(MirrorCell)
@@ -77,6 +88,15 @@ class MirrorCellBaseContractTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(method=name):
                 with self.assertRaises(TreeStructureError) as ctx:
                     await getattr(device, name)()
+                self.assertEqual(ctx.exception.code, 3002)
+                self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_CRITICAL)
+
+    async def test_per_motor_getters_raise_3002_critical(self):
+        device = _make_cell(MirrorCell)
+        for name in self.PER_MOTOR_GETTERS:
+            with self.subTest(method=name):
+                with self.assertRaises(TreeStructureError) as ctx:
+                    await device.get(name)
                 self.assertEqual(ctx.exception.code, 3002)
                 self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_CRITICAL)
 
@@ -97,7 +117,7 @@ class MirrorCellBaseContractTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_fallthrough_to_alpaca_connector(self):
         device = _make_cell(MirrorCell)
-        for call in (device.positions(), device.atsetpoint()):
+        for call in (device.positions(), device.atsetpoint(), device.get('motor0position')):
             with self.assertRaises(TreeStructureError):
                 await call
         device._connector.get.assert_not_awaited()
@@ -162,6 +182,43 @@ class MirrorCellACCReadsTest(unittest.IsolatedAsyncioTestCase):
         device._connector.put.return_value = _reply(one_stopped)
         self.assertFalse(await device.atsetpoint())
 
+    async def test_per_motor_scalars_via_get_dispatch(self):
+        """motor<N>{position,status,statustext} resolve through device.get()."""
+        device = _make_cell()
+        device._connector.put.return_value = _reply(ZB08_INFO)
+        self.assertEqual(await device.get('motor0position'), 4.6999998092651369e-06)
+        self.assertEqual(await device.get('motor1position'), -1.4e-05)
+        self.assertEqual(await device.get('motor2position'), 1.2199999809265136e-05)
+        self.assertEqual(await device.get('motor1status'), 9)
+        self.assertEqual(await device.get('motor1statustext'), 'Stopped')
+        device._connector.get.assert_not_awaited()  # served by mirrorcell_info, no fallthrough
+
+    async def test_per_motor_scalars_follow_vendor_index_not_list_order(self):
+        device = _make_cell()
+        shuffled = {"Available": True, "Motors": list(reversed(ZB08_INFO["Motors"]))}
+        device._connector.put.return_value = _reply(shuffled)
+        self.assertEqual(await device.get('motor0position'), 4.6999998092651369e-06)
+        self.assertEqual(await device.get('motor2position'), 1.2199999809265136e-05)
+
+    async def test_out_of_range_motor_index_is_4007_and_sends_nothing(self):
+        device = _make_cell()
+        for name in ('motor3position', 'motor12status'):
+            with self.subTest(attribute=name):
+                with self.assertRaises(TreeOtherError) as ctx:
+                    await device.get(name)
+                self.assertEqual(ctx.exception.code, 4007)
+        device._connector.put.assert_not_awaited()
+        device._connector.get.assert_not_awaited()
+
+    async def test_missing_motor_index_in_reply_is_2002(self):
+        device = _make_cell()
+        two_motors = {"Available": True, "Motors": ZB08_INFO["Motors"][:2]}
+        device._connector.put.return_value = _reply(two_motors)
+        with self.assertRaises(TreeValueError) as ctx:
+            await device.get('motor2position')
+        self.assertEqual(ctx.exception.code, 2002)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+
     async def test_moving_true_when_any_motor_moves(self):
         device = _make_cell()
         device._connector.put.return_value = _reply(ZB08_INFO)
@@ -198,10 +255,11 @@ class MirrorCellACCAvailabilityTest(unittest.IsolatedAsyncioTestCase):
     async def test_decomposed_reads_raise_2002_critical_when_unavailable(self):
         device = _make_cell()
         device._connector.put.return_value = _reply(WK06_INFO)
-        for name in ('positions', 'motorstatuses', 'motorstatustexts', 'atsetpoint', 'moving'):
+        for name in ('positions', 'motorstatuses', 'motorstatustexts', 'atsetpoint', 'moving',
+                     'motor0position', 'motor0status', 'motor0statustext'):
             with self.subTest(method=name):
                 with self.assertRaises(TreeValueError) as ctx:
-                    await getattr(device, name)()
+                    await device.get(name)
                 self.assertEqual(ctx.exception.code, 2002)
                 self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_CRITICAL)
 
@@ -215,10 +273,10 @@ class MirrorCellACCAvailabilityTest(unittest.IsolatedAsyncioTestCase):
 
 
 class MirrorCellACCFaultTest(unittest.IsolatedAsyncioTestCase):
-    """A faulted motor surfaces as 4009 on every decomposed read."""
+    """A faulted motor surfaces as 4009 on value reads; status reads report it."""
 
     FAULTS = [(0, 'Invalid'), (2, 'TimeoutPositionControl'), (5, 'MovingError'),
-              (6, 'TemperatureMotorAboveLimit'), (10, 'HbridgeOpen'),
+              (6, 'TemperatureMotorAboveLimit'),
               (11, 'NoPositionInfo'), (12, 'PositionLimitViolation')]
 
     def _faulted(self, code, text):
@@ -237,21 +295,57 @@ class MirrorCellACCFaultTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
                 self.assertIn(text, str(ctx.exception.message))
 
-    async def test_fault_hits_all_decomposed_reads(self):
+    async def test_fault_hits_all_value_reads(self):
         device = _make_cell()
         device._connector.put.return_value = _reply(self._faulted(5, 'MovingError'))
-        for name in ('positions', 'motorstatuses', 'motorstatustexts', 'atsetpoint', 'moving'):
+        for name in ('positions', 'atsetpoint', 'moving', 'motor1position'):
             with self.subTest(method=name):
                 with self.assertRaises(TreeOtherError) as ctx:
-                    await getattr(device, name)()
+                    await device.get(name)
                 self.assertEqual(ctx.exception.code, 4009)
 
-    async def test_status_stays_readable_while_faulted(self):
+    async def test_hbridge_open_is_normal_idle_not_a_fault(self):
+        """All motors sit in HbridgeOpen (10) during routine operation.
+
+        Verified live 2026-08-19 on jk15 and zb08: drive bridge disengaged,
+        encoder positions valid and continuous with earlier readings. Every
+        read must work; the motors are neither moving nor actively holding.
+        """
+        device = _make_cell()
+        idle = {"Available": True,
+                "Motors": [_motor(0, -9.7e-05, 10, "HbridgeOpen"),
+                           _motor(1, 0.00022660000610351562, 10, "HbridgeOpen"),
+                           _motor(2, 0.0002075, 10, "HbridgeOpen")]}
+        device._connector.put.return_value = _reply(idle)
+        self.assertEqual(await device.positions(),
+                         [-9.7e-05, 0.00022660000610351562, 0.0002075])
+        self.assertEqual(await device.get('motor0position'), -9.7e-05)
+        self.assertEqual(await device.motorstatuses(), [10, 10, 10])
+        self.assertIs(await device.moving(), False)
+        self.assertIs(await device.atsetpoint(), False)
+
+    async def test_per_motor_position_fault_is_isolated(self):
+        """Motor 1 faulting must not blind telemetry for motors 0 and 2."""
+        device = _make_cell()
+        device._connector.put.return_value = _reply(self._faulted(6, 'TemperatureMotorAboveLimit'))
+        self.assertEqual(await device.get('motor0position'), 0.0)
+        self.assertEqual(await device.get('motor2position'), 0.0)
+        with self.assertRaises(TreeOtherError) as ctx:
+            await device.get('motor1position')
+        self.assertEqual(ctx.exception.code, 4009)
+
+    async def test_status_reads_stay_readable_while_faulted(self):
+        """The status enum is the fault channel — it must reach the time-series."""
         device = _make_cell()
         faulted = self._faulted(12, 'PositionLimitViolation')
         device._connector.put.return_value = _reply(faulted)
         self.assertEqual(await device.mirrorcellstatus(), faulted)
         self.assertIs(await device.available(), True)
+        self.assertEqual(await device.motorstatuses(), [9, 12, 9])
+        self.assertEqual(await device.motorstatustexts(),
+                         ['Stopped', 'PositionLimitViolation', 'Stopped'])
+        self.assertEqual(await device.get('motor1status'), 12)
+        self.assertEqual(await device.get('motor1statustext'), 'PositionLimitViolation')
 
 
 class MirrorCellACCMalformedReplyTest(unittest.IsolatedAsyncioTestCase):

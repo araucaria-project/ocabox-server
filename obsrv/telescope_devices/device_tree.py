@@ -1,5 +1,7 @@
+import functools
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Optional, Union, List, MutableMapping, Dict, Coroutine, Callable
 
@@ -616,14 +618,24 @@ class MirrorCell(Device):
 
     Attributes (GET): ``available``, ``mirrorcellstatus`` (raw vendor dict),
     and its decomposed fields ``positions``, ``motorstatuses``,
-    ``motorstatustexts``, ``atsetpoint``, ``moving``.
+    ``motorstatustexts``, ``atsetpoint``, ``moving``, plus per-motor scalars
+    ``motor<N>position``, ``motor<N>status``, ``motor<N>statustext``
+    (``N`` = 0…``MOTOR_COUNT``-1) so telemetry can subscribe to one value per
+    subject (the TimescaleDB pipeline stores one number per ``(subject,
+    metric)`` — a list attribute cannot land there).
     Attributes (PUT): ``moveallmotorsto``, ``moveallmotorsoffset``,
     ``moveonemotoroffset``, ``stoponemotor``, ``stopallmotors``.
 
     Error-model contract (mirrors ``Tertiary``): a motor fault must surface as
-    ``TreeOtherError(4009)`` "device reported an error" on every decomposed
-    read — never as a readable boolean — while ``mirrorcellstatus`` stays the
-    raw diagnostic view and ``available`` stays a plain capability probe.
+    ``TreeOtherError(4009)`` "device reported an error" on every *value* read
+    (``positions``, ``atsetpoint``, ``moving``, ``motor<N>position``) — never
+    as a readable boolean — with per-motor position reads faulting only on
+    *their own* motor, so one bad motor does not blind telemetry for the other
+    two. *Status* reads (``mirrorcellstatus``, ``motorstatuses``,
+    ``motorstatustexts``, ``motor<N>status``, ``motor<N>statustext``) stay
+    readable while faulted: the status enum IS the fault channel, and raising
+    on it would keep the fault code out of the telemetry time-series exactly
+    when an alert needs it. ``available`` stays a plain capability probe.
     """
     KIND = StandardTelescopeComponents.MIRRORCELL
 
@@ -646,12 +658,29 @@ class MirrorCell(Device):
         11: 'NoPositionInfo',
         12: 'PositionLimitViolation',
     }
-    #: Statuses meaning the motor/controller is faulted → 4009 on decomposed reads.
-    FAULT_STATUSES = frozenset({0, 2, 5, 6, 10, 11, 12})
+    #: Statuses meaning the motor/controller is faulted → 4009 on value reads.
+    #: ``HbridgeOpen`` (10) is deliberately NOT here: it is the normal idle
+    #: state — drive bridge disengaged, position still valid from the encoder.
+    #: Verified live 2026-08-19: all six motors on jk15 and zb08 sat in
+    #: ``HbridgeOpen`` with sane, continuous positions (they reported
+    #: ``Stopped`` on 2026-08-04) — treating it as a fault would make every
+    #: value read raise 4009 during routine operation.
+    FAULT_STATUSES = frozenset({0, 2, 5, 6, 11, 12})
     #: Statuses meaning the motor is in motion.
     MOVING_STATUSES = frozenset({1, 4, 7, 8})
     #: Status meaning the motor holds its commanded position.
     AT_SETPOINT_STATUS = 3
+
+    #: Grammar of the per-motor scalar GET attributes, resolved by
+    #: ``_find_attribute`` to the ``_motor_*`` template methods.
+    _PER_MOTOR_RE = re.compile(r'motor(\d+)(position|status|statustext)$')
+
+    def _find_attribute(self, attribute):
+        match = self._PER_MOTOR_RE.fullmatch(attribute)
+        if match:
+            index, field = int(match.group(1)), match.group(2)
+            return functools.partial(getattr(self, f'_motor_{field}'), index)
+        return super()._find_attribute(attribute)
 
     def _not_implemented(self, method: str):
         raise TreeStructureError(
@@ -678,12 +707,40 @@ class MirrorCell(Device):
         self._not_implemented('positions')
 
     async def motorstatuses(self, **kwargs):
-        """Motor status codes, ordered by motor index (list[int])."""
+        """Motor status codes, ordered by motor index (list[int]).
+
+        A status read: stays readable while a motor is faulted — the code is
+        the fault channel itself.
+        """
         self._not_implemented('motorstatuses')
 
     async def motorstatustexts(self, **kwargs):
-        """Motor status names, ordered by motor index (list[str])."""
+        """Motor status names, ordered by motor index (list[str]).
+
+        A status read: stays readable while a motor is faulted.
+        """
         self._not_implemented('motorstatustexts')
+
+    async def _motor_position(self, index: int, **kwargs):
+        """Position of one motor in **metres** (float); serves ``motor<N>position``.
+
+        Faults only on *its own* motor's fault status.
+        """
+        self._not_implemented(f'motor{index}position')
+
+    async def _motor_status(self, index: int, **kwargs):
+        """Status code of one motor (int); serves ``motor<N>status``.
+
+        A status read: stays readable while faulted.
+        """
+        self._not_implemented(f'motor{index}status')
+
+    async def _motor_statustext(self, index: int, **kwargs):
+        """Status name of one motor (str); serves ``motor<N>statustext``.
+
+        A status read: stays readable while faulted.
+        """
+        self._not_implemented(f'motor{index}statustext')
 
     async def atsetpoint(self, **kwargs):
         """True when every motor holds its commanded position (bool)."""
@@ -759,16 +816,28 @@ class MirrorCellACC(MirrorCell):
         return [self._position(m) for m in await self._motors()]
 
     async def motorstatuses(self, **kwargs):
-        return [self._status_code(m) for m in await self._motors()]
+        return [self._status_code(m) for m in await self._motors_raw()]
 
     async def motorstatustexts(self, **kwargs):
-        return [self._status_text(m) for m in await self._motors()]
+        return [self._status_text(m) for m in await self._motors_raw()]
 
     async def atsetpoint(self, **kwargs):
         return all(self._status_code(m) == self.AT_SETPOINT_STATUS for m in await self._motors())
 
     async def moving(self, **kwargs):
         return any(self._status_code(m) in self.MOVING_STATUSES for m in await self._motors())
+
+    async def _motor_position(self, index: int, **kwargs):
+        motor = await self._motor(index)
+        if self._status_code(motor) in self.FAULT_STATUSES:
+            self._raise_fault(motor)
+        return self._position(motor)
+
+    async def _motor_status(self, index: int, **kwargs):
+        return self._status_code(await self._motor(index))
+
+    async def _motor_statustext(self, index: int, **kwargs):
+        return self._status_text(await self._motor(index))
 
     async def moveallmotorsto_put(self, **kwargs):
         """Move all motors to absolute positions. Parameter: ``Positions`` (metres)."""
@@ -849,12 +918,13 @@ class MirrorCellACC(MirrorCell):
                 severity=TreeValueError.SEVERITY_NORMAL)
         return info
 
-    async def _motors(self) -> List[dict]:
-        """Motors of a healthy, available mirror cell, ordered by motor index.
+    async def _motors_raw(self) -> List[dict]:
+        """Motors of an available mirror cell, ordered by motor index — no fault gate.
 
-        Raises 2002/CRITICAL when the subsystem is absent — permanent for that
-        telescope, so a SERVICE-policy subscriber stops instead of retrying
-        forever — and 4009/NORMAL when a motor reports a fault.
+        Serves the status reads, which must stay readable while a motor is
+        faulted. Raises 2002/CRITICAL when the subsystem is absent — permanent
+        for that telescope, so a SERVICE-policy subscriber stops instead of
+        retrying forever.
         """
         info = await self._info()
         if not info.get('Available'):
@@ -870,17 +940,39 @@ class MirrorCellACC(MirrorCell):
                 address=None, code=2002,
                 message=f"ACC reports the mirror cell available but sent no motors: {info!r}",
                 severity=TreeValueError.SEVERITY_NORMAL)
-        motors = sorted(motors, key=self._index)
+        return sorted(motors, key=self._index)
+
+    async def _motors(self) -> List[dict]:
+        """Motors of a healthy, available mirror cell — the value-read gate.
+
+        On top of ``_motors_raw``, raises 4009/NORMAL when any motor reports a
+        fault: an aggregate value composed over a faulted motor would
+        masquerade as healthy data.
+        """
+        motors = await self._motors_raw()
         faulted = [m for m in motors if self._status_code(m) in self.FAULT_STATUSES]
         if faulted:
-            worst = faulted[0]
-            raise TreeOtherError(
-                address=None, code=4009,
-                message=f"Mirror-cell motor {self._index(worst)} on {self.sys_id} reports "
-                        f"{self._status_text(worst)!r}; status: {motors!r}",
-                severity=TreeOtherError.SEVERITY_NORMAL,
-                device_errno=self._status_code(worst))
+            self._raise_fault(faulted[0], context=motors)
         return motors
+
+    async def _motor(self, index: int) -> dict:
+        """One motor by vendor ``Index`` — no fault gate (callers decide)."""
+        index = self._require_index(index)
+        for motor in await self._motors_raw():
+            if self._index(motor) == index:
+                return motor
+        raise TreeValueError(
+            address=None, code=2002,
+            message=f"Mirror-cell motor {index} missing in ACC reply on {self.sys_id}",
+            severity=TreeValueError.SEVERITY_NORMAL)
+
+    def _raise_fault(self, motor: dict, context=None):
+        raise TreeOtherError(
+            address=None, code=4009,
+            message=f"Mirror-cell motor {self._index(motor)} on {self.sys_id} reports "
+                    f"{self._status_text(motor)!r}; status: {context if context is not None else motor!r}",
+            severity=TreeOtherError.SEVERITY_NORMAL,
+            device_errno=self._status_code(motor))
 
     def _index(self, motor: dict) -> int:
         return int(self._require_field(motor, 'Index'))
