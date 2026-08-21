@@ -2,57 +2,29 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+...
+
+## [2.4.0]
 ### Added
-- **Mirror cell (M1 support / active collimation) component** — new component
-  kind `mirrorcell` (interface contract) plus the ASA implementation
-  `mirrorcellACC`. All reads are served by the single vendor action
-  `mirrorcell_info` and decomposed into GET-able (hence cacheable/subscribable)
-  attributes: `mirrorcellstatus` (raw dict), `available`, `positions` (metres —
-  µm-scale in practice), `motorstatuses`, `motorstatustexts`, `atsetpoint`,
-  `moving`, plus **per-motor scalars** `motor<N>position`, `motor<N>status`,
-  `motor<N>statustext` (`N` = 0…2) so telemetry can subscribe to one value per
-  NATS subject (the TimescaleDB pipeline stores one number per
-  `(subject, metric)` — a list attribute cannot land there). Commands:
-  `moveallmotorsto`, `moveallmotorsoffset`, `moveonemotoroffset`,
-  `stoponemotor`, `stopallmotors`.
-  - The mirror cell is **not an ALPACA device** — its actions live on the ASA
-    **ACC focuser**, so requests are routed with `kind=focuser` (the same trick
-    as `CoverCalibratorOCA`) and the component's own `device_number` selects the
-    focuser (`0` on OCM).
-  - ACC replies are **double-encoded** (the ALPACA envelope's `Value` is a JSON
-    *string*); unwrapped here so clients get real dicts/lists.
-  - Verified live 2026-08-04 (read-only): mirror cell available on **jk15** and
-    **zb08** (3 motors, all `Stopped`), `Available: false` on **wk06**.
-    Movement paths are unit-tested only — no move has been commanded on hardware.
-- **Error model** follows `Tertiary`, with a value/status split: a motor fault
-  status (`Invalid`, `TimeoutPositionControl`, `MovingError`,
-  `TemperatureMotorAboveLimit`, `NoPositionInfo`,
-  `PositionLimitViolation`) raises `TreeOtherError(4009, NORMAL)` carrying
-  `device_errno` on every decomposed **value** read (`positions`, `atsetpoint`,
-  `moving`, `motor<N>position` — the latter only for its *own* motor, so one
-  bad motor does not blind telemetry for the other two), while **status** reads
-  (`mirrorcellstatus`, `motorstatuses`, `motorstatustexts`, `motor<N>status`,
-  `motor<N>statustext`) stay readable — the status enum is the fault channel,
-  and it must reach the telemetry time-series exactly when an alert needs it.
-  `HbridgeOpen` is **not** a fault: verified live 2026-08-19, all six motors on
-  jk15 and zb08 idle in that state with valid encoder positions — it is the
-  drive bridge disengaged between moves.
-  `available` stays a never-raising capability probe. A telescope without the subsystem
-  raises `TreeValueError(2002, CRITICAL)` — permanent, so SERVICE-policy
-  subscribers stop instead of retrying forever. Commands validate `Index`
-  (0…2, rejecting booleans and truncating floats — `1.9` must not actuate
-  motor 1) and the per-motor movement values (finite numbers only: `True`
-  would convert to a 1-metre command on a µm-scale actuator, NaN/±inf would
-  serialize as nonstandard JSON), raising `TreeOtherError(4007, NORMAL)`
-  before anything is sent; a non-`ok` vendor acknowledgement becomes `4009`;
-  non-numeric fields in the vendor reply translate to `2002` instead of
-  leaking a raw `ValueError`.
-- Base `MirrorCell` is an explicit interface contract — every method raises
-  `TreeStructureError(3002, CRITICAL)`, so a tree configured with the plain
-  `mirrorcell` kind fails loudly instead of reaching a nonexistent ALPACA
-  endpoint. 44 unit tests cover the contract, reads (aggregate and per-motor),
-  faults and fault isolation, the HbridgeOpen idle state, malformed replies,
-  command payloads and parameter validation.
+- **Mirror cell (M1 / active collimation) component** — kinds `mirrorcell`
+  (interface contract; every method raises 3002 CRITICAL) and `mirrorcellACC`
+  (ASA: vendor actions on the ACC focuser, routed with `kind=focuser` like
+  `CoverCalibratorOCA`). GET-able (cacheable/subscribable) reads: `available`,
+  `mirrorcellstatus` (raw dict), `positions` (metres), `motorstatuses`,
+  `motorstatustexts`, `atsetpoint`, `moving`, plus per-motor scalars
+  `motor<N>{position,status,statustext}` (`N` = 0…2) for one-value-per-subject
+  telemetry. Commands: `moveallmotorsto`, `moveallmotorsoffset`,
+  `moveonemotoroffset`, `stoponemotor`, `stopallmotors` — **unit-tested only,
+  never commanded on hardware** (#31); reads verified live on jk15/zb08
+  (wk06 has no mirror cell). Details in the `MirrorCell`/`MirrorCellACC`
+  docstrings.
+- **Error model** follows `Tertiary`, with a value/status split: motor fault →
+  `4009 NORMAL` with `device_errno` on value reads (per-motor position faults
+  only on its own motor), while status reads stay readable — the status enum is
+  the fault channel; `HbridgeOpen` is normal idle, not a fault. Subsystem
+  absent → `2002 CRITICAL` (permanent); malformed vendor replies → `2002
+  NORMAL`; command parameters strictly validated (integer index, finite
+  values) → `4007` before anything is sent; non-`ok` acknowledgement → `4009`.
 
   Config sketch (`ocabox-config-ocm`, as a child of the telescope):
   ```yaml
