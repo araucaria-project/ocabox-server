@@ -2,6 +2,15 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Added
+- **Deadline shedding** (rollout flag `TreeAlpacaObservatory.shed_expired_requests`,
+  default off): a request whose absolute deadline already passed while queued is
+  refused with `4004 TEMPORARY` *before* any device I/O. Previously an expired
+  request still spawned the Alpaca HTTP coroutine only to cancel it.
+### Changed
+- Router drop paths (request expired on arrival; solve timeout) now log a
+  throttled summary (first + every 100th, WARNING) with counters instead of a
+  per-message ERROR — a client avalanche can no longer flood the journal.
 ...
 
 ## [2.4.0]

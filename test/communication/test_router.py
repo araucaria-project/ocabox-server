@@ -296,3 +296,53 @@ class RouterTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RouterSheddingCountersTest(unittest.TestCase):
+    """Both pre-existing drop paths must count and throttle instead of logging
+    a per-message ERROR (avalanche → journal flood)."""
+
+    def setUp(self):
+        super().setUp()
+        try:
+            self.loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+
+    def tearDown(self):
+        self.loop.close()
+        asyncio.set_event_loop(None)
+        super().tearDown()
+
+    @staticmethod
+    def _message_with_deadline(deadline: float) -> List[bytes]:
+        return MultipartStructure.from_parts(
+            create_time=MessageSerializer.pack_b(time.time()),
+            id_=b'test-msg-1',
+            data=[b'x'],
+            request_timeout=MessageSerializer.pack_b(deadline),
+            service_msg=b'\xc2',
+            prefix_data=[b'client-1'],
+        ).multipart
+
+    def test_expired_on_arrival_is_counted_not_solved(self):
+        vr = Router(SampleTestResolver(SampleTestValueProvider("xxx", "xxx", [])),
+                    name='SampleTestRouter', port=5559)
+        sent = []
+        vr._front_socket.send_multipart = lambda m: sent.append(m)
+
+        async def scenario():
+            for _ in range(3):
+                task = asyncio.create_task(vr._send_back(self._message_with_deadline(time.time() - 1.0)),
+                                           name=vr._message_task_name)
+                vr._message_tasks.append(task)
+                await task
+
+        try:
+            self.loop.run_until_complete(scenario())
+            self.assertEqual(vr._expired_on_arrival, 3)
+            self.assertEqual(sent, [])
+            self.assertEqual(len(vr._message_tasks), 0)
+        finally:
+            vr._front_socket.close()
