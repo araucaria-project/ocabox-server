@@ -2,143 +2,85 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [2.5.1]
+### Fixed
+- **astropy 8 compatibility**: `tree_ephemeris` used `get_moon` (removed in astropy 7);
+  replaced with `get_body("moon", ...)`, compatible with astropy 5–8.
+
+## [2.5.0]
 ### Added
-- **Deadline shedding** (rollout flag `TreeAlpacaObservatory.shed_expired_requests`,
-  default off): a request whose absolute deadline already passed while queued is
-  refused with `4004 TEMPORARY` *before* any device I/O. Previously an expired
-  request still spawned the Alpaca HTTP coroutine only to cancel it.
-- **Negative caching in `TreeCache`** (rollout flag `TreeCache.negative_cache.enabled`,
-  default off): a failure from the subcontractor (default codes 2002, 2003,
-  4002, 4005, 4009 — device/transport only) is remembered per address and served
-  back fail-fast (same error code, message tagged `[negative-cache: …]`) until
-  its TTL passes; TTL escalates 2× per consecutive failure (`ttl_initial` 1 s →
-  `ttl_max` 10 s — bounded by how long a human who just fixed a device is
-  willing to wait for the status to catch up) and one probe per TTL re-checks
-  the device. TTL deadlines use `time.monotonic()` (immune to clock steps) and
-  the escalation exponent is capped (a months-long outage must not overflow
-  `2**fail_count`). Errors served from the negative cache carry
-  `from_negative_cache=True` in kwargs, and `TreeConditionalFreezer` does
-  **not** count them toward `nr_of_unsuccessful_refreshes` — the failure
-  counter advances only on real device probes, so fail-fast errors cannot race
-  subscriptions to `2003` during short blips. Success clears the
-  state and logs recovery. Stops a dead TCU from being re-probed by every
-  request while keeping the client contract unchanged.
+- **Deadline shedding** (flag `TreeAlpacaObservatory.shed_expired_requests`, default
+  off): requests already past their deadline are refused with `4004 TEMPORARY`
+  before any device I/O.
+- **Negative caching in `TreeCache`** (flag `TreeCache.negative_cache.*`, default
+  off): failures (codes 2002/2003/4002/4005/4009) are served fail-fast per address
+  with escalating TTL (1 s → 10 s, monotonic), one real probe per TTL; cache-served
+  errors carry `from_negative_cache` and are not counted by the freezer toward 2003.
 ### Changed
-- `TreeCache._known_values` is a dict keyed by `str(address)` (was: list with
-  linear scan + `Address.__eq__` per lookup — visible in production CPU
-  profiles). New `_add_known_value()` is the single insertion point.
-- Router drop paths (request expired on arrival; solve timeout) now log a
-  throttled summary (first + every 100th, WARNING) with counters instead of a
-  per-message ERROR — a client avalanche can no longer flood the journal.
-...
+- `TreeCache._known_values`: list → dict keyed by `str(address)`.
+- Router drop paths (expired on arrival, solve timeout): throttled WARNING with
+  counters instead of per-message ERROR.
 
 ## [2.4.0]
 ### Added
-- **Mirror cell (M1 / active collimation) component** — kinds `mirrorcell`
-  (interface contract; every method raises 3002 CRITICAL) and `mirrorcellACC`
-  (ASA: vendor actions on the ACC focuser, routed with `kind=focuser` like
-  `CoverCalibratorOCA`). GET-able (cacheable/subscribable) reads: `available`,
-  `mirrorcellstatus` (raw dict), `positions` (metres), `motorstatuses`,
-  `motorstatustexts`, `atsetpoint`, `moving`, plus per-motor scalars
-  `motor<N>{position,status,statustext}` (`N` = 0…2) for one-value-per-subject
-  telemetry. Commands: `moveallmotorsto`, `moveallmotorsoffset`,
-  `moveonemotoroffset`, `stoponemotor`, `stopallmotors` — **unit-tested only,
-  never commanded on hardware** (#31); reads verified live on jk15/zb08
-  (wk06 has no mirror cell). Details in the `MirrorCell`/`MirrorCellACC`
-  docstrings.
-- **Error model** follows `Tertiary`, with a value/status split: motor fault →
-  `4009 NORMAL` with `device_errno` on value reads (per-motor position faults
-  only on its own motor), while status reads stay readable — the status enum is
-  the fault channel; `HbridgeOpen` is normal idle, not a fault. Subsystem
-  absent → `2002 CRITICAL` (permanent); malformed vendor replies → `2002
-  NORMAL`; command parameters strictly validated (integer index, finite
-  values) → `4007` before anything is sent; non-`ok` acknowledgement → `4009`.
-
-  Config sketch (`ocabox-config-ocm`, as a child of the telescope):
-  ```yaml
-  mirrorcell:
-    kind: mirrorcellACC
-    device_number: 0        # the ACC focuser that carries the actions
-  ```
+- **Mirror cell (M1) component**: kinds `mirrorcell` (interface contract, 3002) and
+  `mirrorcellACC` (ASA, via the ACC focuser) — status/position/per-motor reads,
+  movement and stop commands (never commanded on hardware yet, #31).
+- Mirror-cell error model: motor fault → `4009` + `device_errno`; subsystem absent →
+  `2002 CRITICAL`; invalid parameters → `4007`; non-`ok` acknowledgement → `4009`.
 
 ## [2.3.18]
 ### Added
-- **Tertiary (M3) read-back** — `TertiaryOCA` now exposes GET-able (hence
-  cacheable/subscribable) attributes, all served by the single ASA AutoSlew
-  vendor action `tertiarystatus` on the mount's ALPACA device:
-  `tertiarystatus` (full dict) and its decomposed fields `nasmythport`,
-  `angle`, `moving`, `motoron`, `portname`. Port numbers are the physical
-  AutoSlew ports (jk15: 1=ADR6/beso, 2=ADR10/andor; verified live on jk15-tcu
-  2026-07-29) — NOT 0-based.
-- **Controller faults use the standard error model**: AutoSlew `ErrorRaised`
-  is translated to `TreeOtherError(4009, NORMAL)` ("device reported an
-  error") on every decomposed read, and a non-`true` acknowledgement of
-  `selectnasmythport` raises `4009` as well — clients see a standard
-  `OcaboxDeviceError` instead of polling a vendor-specific boolean.
-  `tertiarystatus` always returns the raw dict (incl. `ErrorRaised`) as the
-  diagnostic view of a faulted controller.
-- Base `Tertiary` is now an explicit interface contract: every method raises
-  `TreeStructureError(3002, CRITICAL)`, so a tree configured with the plain
-  `tertiary` kind fails loudly instead of falling through to a nonexistent
-  ALPACA endpoint.
+- **Tertiary (M3) read-back**: GET-able `tertiarystatus` plus decomposed
+  `nasmythport`, `angle`, `moving`, `motoron`, `portname` (physical AutoSlew ports).
+- AutoSlew `ErrorRaised` and failed `selectnasmythport` acknowledgement → `4009`.
+- Base `Tertiary` is an interface contract (every method → `3002 CRITICAL`).
 ### Changed
-- `TertiaryOCA.selectnasmythport_put` validates its `Position` parameter
-  (int or int-like string) and raises `TreeOtherError(4007, NORMAL)` instead
-  of silently sending an empty-parameter movement action.
+- `selectnasmythport_put` validates `Position` (→ `4007` on bad input).
 ### Dependencies
-- Requires ocabox-common ≥ `1.2.2` — fixes `TreeStructureError` dropping the
-  `severity` argument (every 3002 was silently demoted to NORMAL, making
-  SERVICE-policy clients retry forever against not-implemented endpoints).
+- ocabox-common ≥ 1.2.2 (`TreeStructureError` no longer drops `severity`).
 
 ## [2.3.17]
 ### Fixed
-- `AlpacaConnector` now uses a single long-lived `aiohttp.ClientSession` per connector (created lazily on first request) instead of opening a fresh session + TCP connection per request. The old behaviour issued a fresh `getaddrinfo` on every poll (~150 DNS queries/s in production, all cache-missing), so a brief upstream-DNS hiccup saturated the resolver thread-pool with uncancellable lookups and the process never recovered without a restart (Phenomenon A — "loses all ALPACA hosts ~hourly, curl still works"). Keep-alive + a connector-level DNS cache (`ttl_dns_cache=30s`) collapse that storm.
-- `IrisCcdConnector` no longer leaks a UDP socket per timed-out command. `_execute_command` dropped the cached endpoint with `del self._endpoints[address]` on timeout/reconnect without closing the transport, orphaning the socket FD; with the device unreachable this leaked ~4 FDs/min until `RLIMIT_NOFILE` (1024) was exhausted. The leak was previously masked by the hourly Phenomenon-A restarts and surfaced once the ALPACA fix above let the process run stably. New `_drop_endpoint()` helper closes the transport before dropping it.
+- `AlpacaConnector`: single long-lived aiohttp session per connector + DNS cache
+  (was: new session and `getaddrinfo` per request — the hourly "loses all ALPACA
+  hosts" wedge).
+- `IrisCcdConnector`: UDP socket leak on timed-out commands (FD exhaustion).
 ### Changed
-- `AlpacaConnector` session uses `ClientTimeout(total=10s, connect=5s, sock_connect=5s)` (aiohttp default is 5 min) and `TCPConnector(limit_per_host=8)`. The per-host cap also keeps the ASCOM driver queue shallow, mitigating the `code=1026` filterwheel queue-depth timeouts (Phenomenon B).
+- Alpaca session: `ClientTimeout(total=10 s, connect=5 s)`, `limit_per_host=8`.
 ### Dependencies
-- Added `aiodns` so aiohttp's `DefaultResolver` is the async (c-ares) resolver, which runs DNS on the event loop instead of the blocking `getaddrinfo` thread-pool.
-> Note: this work ran on production `tic` since 2026-06-25 as version "2.3.16" from branch `fix/alpaca-dns-resolver-wedge`; it was renumbered to 2.3.17 on merge because master's 2.3.16 was taken by the 4009 release below.
+- `aiodns` (async c-ares resolver on the event loop).
+
+(Ran on production tic as "2.3.16" since 2026-06-25; renumbered on merge.)
 
 ## [2.3.16]
 ### Added
-- Device-reported faults now surface as `TreeOtherError(code=4009, NORMAL)`
-  ("device reported an error") instead of `TreeValueError(2002)`. This
-  separates *the device/driver faulted* (TIC worked, relaying the device's
-  error) from *TIC failed to build the value*. The driver's numeric code is
-  carried in `device_errno` (kwargs), so clients read e.g. ASCOM `1035`
-  ("Telescope is not ready, please clear Error") without parsing the message
-  string or reading server logs.
-  - `AlpacaConnector.raise_tree_exeption`: numeric `AlpacaError` (other than
-    device-busy `20072`) → `4009` with `device_errno=error_number`. Warning
-    log now includes the errno and message.
-  - `IrisCcdConnector`: device-replied `RuntimeError` on `get`/`put`/`call`
-    → `4009` (was `2002`).
-  - Pilar's device-reply path is **not** converted yet (its `get` re-raises
-    raw `RuntimeError`, `put` returns a `{"status": "failed"}` dict) — tracked
-    as a follow-up; see `doc/errors.md` "Device-reported errors".
+- Device-reported faults → `TreeOtherError(4009, NORMAL)` with `device_errno`
+  (Alpaca numeric errors except busy `20072`; IRIS-CCD `RuntimeError`). Pilar not
+  converted yet.
 ### Dependencies
-- Requires ocabox-common ≥ `1.2.1`, which registers the 4009 code description
-  (dependency tracks git `master`; 4009 still functions without it — the
-  description lookup just degrades to empty).
+- ocabox-common ≥ 1.2.1 (registers 4009).
 
 ## [2.3.15]
 ### Fixed
-- `IrisCcdConnector` no longer swallows transient TCP failures (`ConnectionError`, `BrokenPipeError`, `OSError`, `asyncio.TimeoutError`, `TimeoutError`) and returns `None` / `{"status": "failed"}`. The swallow caused cycle-query subscribers to escalate to `TreeValueError(2003, CRITICAL)` after retries, terminating PMS subscriptions permanently on transient device outages with no auto-recovery (issue #20). Transient IO now raises `TreeOtherError(4005, NORMAL)`; device-replied errors (`RuntimeError`) raise `TreeValueError(2002, NORMAL)`. Applied symmetrically to `get`, `put`, and `call`.
+- `IrisCcdConnector` no longer swallows transient TCP failures (#20): transient IO →
+  `4005 NORMAL`, device-replied errors → `2002 NORMAL`.
 ### Changed
-- `PilarConnector` aligns with the new convention: `_TEMPORARY_IO_ERRORS` raise `TreeOtherError(4005, NORMAL)` instead of `TEMPORARY`. NORMAL surfaces sustained device-offline state to the operator (throttled logging via `ErrorPolicy.SERVICE`); TEMPORARY would silently retry inside the cycle-query layer for arbitrarily long outages. Single-poll blips are still absorbed by the pool's self-heal logic below the raise site.
-- `doc/errors.md` — added "TEMPORARY vs NORMAL — blip vs sustained" subsection clarifying the convention. Updated the per-connector contract paragraph and the example table.
-- `tree_conditional_freezer.py` — comment at the `2003` raise documenting that `severity=None` resolves to `NORMAL` via the `ResponseError` constructor (the freezer's fallback when no connector error supplied a severity).
+- `PilarConnector`: `_TEMPORARY_IO_ERRORS` → `4005 NORMAL` (was TEMPORARY).
+- `doc/errors.md`: "TEMPORARY vs NORMAL" subsection.
 
 ## [2.3.13]
 ### Added
-- `AlpacaConnector` translates Andor `DRV_ACQUIRING (20072)` to `TreeOtherError(code=4008, severity=TEMPORARY)` so clients can react to "device busy" without string-matching the wrapped error message. `AlpacaError` now retains `error_number` as an attribute.
+- Andor `DRV_ACQUIRING (20072)` → `4008 TEMPORARY` ("device busy");
+  `AlpacaError.error_number` retained.
 ### Dependencies
-- ocabox-common bumped to `1.0.3` (registers code 4008 description).
+- ocabox-common 1.0.3 (registers 4008).
 
 ## [2.3.12]
 ### Fixed
-- Strip cyclic-query bookkeeping (`time_of_known_change`, `no_send_before`, `nr_of_unsuccessful_refreshes`) before forwarding requests to protocol connectors. The leak caused jk15-tcu's strict ASCOM driver to reject GETs with HTTP 400, freezing the cache at the last successful value (e.g. `camera.state` stuck at `EXPOSING` for hours).
+- Cyclic-query bookkeeping fields stripped before forwarding to connectors
+  (the leak froze caches via HTTP 400 on strict ASCOM drivers).
 
 ## [2.3.10]
 ### Added
