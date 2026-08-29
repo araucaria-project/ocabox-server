@@ -8,6 +8,7 @@ from typing import Optional
 
 from obcom.data_colection.address import AddressError
 from obcom.data_colection.coded_error import BaseCodedError
+from obcom.data_colection.coded_error import TreeOtherError
 from obcom.data_colection.value import Value, TreeValueError
 from obcom.data_colection.value_call import ValueRequest
 
@@ -37,6 +38,11 @@ class TreeAlpacaObservatory(TreeBaseProvider):
         self.observatory_name = observatory_name if observatory_name else component_name
         self._observatory = Observatory()
         self._timeout_multiplier = self._get_timeout_multiplier()
+        # Deadline shedding (flag, default off): a request whose absolute deadline
+        # already passed (it waited in the router/freezer queue) must not start
+        # device I/O — the client stopped listening. 4004 TEMPORARY is swallowed
+        # silently by cycle-query clients. See TIC Hardening 2026-08-29 register.
+        self._shed_expired_requests = bool(self._get_cfg('shed_expired_requests', False))
         self._connect_to_observatory()
     
     def _get_timeout_multiplier(self):
@@ -77,6 +83,14 @@ class TreeAlpacaObservatory(TreeBaseProvider):
         if len(alpaca_address) <= 0:
             logger.debug(f"Incoming address to the {self._component_name} module is too short. Address: {address}")
             raise AddressError(address=address, code=1001, message="Incoming address is too short")
+
+        if self._shed_expired_requests and request_timeout:
+            overdue = time.time() - request_timeout
+            if overdue >= 0:
+                raise TreeOtherError(code=4004,
+                                     severity=TreeOtherError.SEVERITY_TEMPORARY,
+                                     message=f"Request deadline passed {overdue:.2f}s ago; "
+                                             f"shed before device I/O")
 
         # Find the target component
         try:

@@ -294,5 +294,111 @@ class RouterTest(unittest.TestCase):
         self.loop.run_until_complete(primitive_coro())
 
 
+
+
+class RouterSheddingCountersTest(unittest.TestCase):
+    """Both pre-existing drop paths must count and throttle instead of logging
+    a per-message ERROR (avalanche → journal flood)."""
+
+    def setUp(self):
+        super().setUp()
+        try:
+            self.loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+
+    def tearDown(self):
+        self.loop.close()
+        asyncio.set_event_loop(None)
+        super().tearDown()
+
+    @staticmethod
+    def _message_with_deadline(deadline: float) -> List[bytes]:
+        from obcom.data_colection.value_call import ValueRequest
+        from obcom.data_colection.address import Address
+        payload = ValueRequest(Address('sample_telescope.any_val'), time.time(),
+                               request_timeout=deadline).to_byte()
+        return MultipartStructure.from_parts(
+            create_time=MessageSerializer.pack_b(time.time()),
+            id_=b'test-msg-1',
+            data=[payload],
+            request_timeout=MessageSerializer.pack_b(deadline),
+            service_msg=b'\xc2',
+            prefix_data=[b'client-1'],
+        ).multipart
+
+    def test_expired_on_arrival_is_counted_not_solved(self):
+        vr = Router(SampleTestResolver(SampleTestValueProvider("xxx", "xxx", [])),
+                    name='SampleTestRouter', port=5559)
+        sent = []
+        vr._front_socket.send_multipart = lambda m: sent.append(m)
+
+        async def scenario():
+            for _ in range(3):
+                task = asyncio.create_task(vr._send_back(self._message_with_deadline(time.time() - 1.0)),
+                                           name=vr._message_task_name)
+                vr._message_tasks.append(task)
+                await task
+
+        try:
+            self.loop.run_until_complete(scenario())
+            self.assertEqual(vr._expired_on_arrival, 3)
+            self.assertEqual(sent, [])
+            self.assertEqual(len(vr._message_tasks), 0)
+        finally:
+            vr._front_socket.close()
+
+    def test_expired_on_arrival_warnings_are_throttled(self):
+        """First and every 100th drop logs a WARNING; everything between is silent."""
+        vr = Router(SampleTestResolver(SampleTestValueProvider("xxx", "xxx", [])),
+                    name='SampleTestRouter', port=5559)
+        vr._front_socket.send_multipart = lambda m: None
+
+        async def scenario(n):
+            for _ in range(n):
+                task = asyncio.create_task(vr._send_back(self._message_with_deadline(time.time() - 1.0)),
+                                           name=vr._message_task_name)
+                vr._message_tasks.append(task)
+                await task
+
+        try:
+            with self.assertLogs('router', level='WARNING') as captured:
+                self.loop.run_until_complete(scenario(101))
+            self.assertEqual(vr._expired_on_arrival, 101)
+            throttled = [r for r in captured.records if 'expired on arrival' in r.getMessage()]
+            self.assertEqual(len(throttled), 2)  # the 1st and the 100th
+            self.assertIn('(1 since start)', throttled[0].getMessage())
+            self.assertIn('(100 since start)', throttled[1].getMessage())
+        finally:
+            vr._front_socket.close()
+
+    def test_solve_timeout_is_counted_and_throttled(self):
+        """A request whose solving exceeds its deadline is dropped, counted and
+        logged as a throttled WARNING (not a per-message ERROR)."""
+        resolver = SampleTestResolver(SampleTestValueProvider("xxx", "xxx", []))
+        resolver.response_delay = 0.5
+        vr = Router(resolver, name='SampleTestRouter', port=5559)
+        sent = []
+        vr._front_socket.send_multipart = lambda m: sent.append(m)
+
+        async def scenario():
+            task = asyncio.create_task(vr._send_back(self._message_with_deadline(time.time() + 0.15)),
+                                       name=vr._message_task_name)
+            vr._message_tasks.append(task)
+            await task
+
+        try:
+            with self.assertLogs('router', level='WARNING') as captured:
+                self.loop.run_until_complete(scenario())
+            self.assertEqual(vr._solve_timeouts, 1)
+            self.assertEqual(vr._expired_on_arrival, 0)
+            self.assertEqual(sent, [])
+            self.assertEqual(len(vr._message_tasks), 0)
+            self.assertTrue(any('timed out' in r.getMessage() for r in captured.records))
+        finally:
+            vr._front_socket.close()
+
+
 if __name__ == '__main__':
     unittest.main()

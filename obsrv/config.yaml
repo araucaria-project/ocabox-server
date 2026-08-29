@@ -48,6 +48,9 @@ data_collection:
   TreeAlpacaObservatory:
     timeout_multiplier: 0.8  # this should be 0 < x < 1
     api_version: 1
+    # Deadline shedding: refuse (4004 TEMPORARY, no device I/O) requests whose
+    # absolute deadline already passed while queued. Rollout flag.
+    shed_expired_requests: false
   TreeBaseRequestBlocker:
     default_control_time: 60
     max_control_time: 86400 # 24h

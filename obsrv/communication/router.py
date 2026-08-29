@@ -46,6 +46,11 @@ class Router(BaseRouterWithConfig):
         self._message_tasks = []
         # self._stop_task_name = f'{self.name}_stop_task'
         self._stop_task = None
+        # Shedding counters: both drop paths below are pre-existing behavior;
+        # the counters replace a per-message ERROR with a throttled summary so
+        # a client avalanche can't flood the journal (TIC Hardening 2026-08-29).
+        self._expired_on_arrival = 0
+        self._solve_timeouts = 0
         # async loop
         self._current_loop = None  # remember async loop with router working
 
@@ -137,7 +142,11 @@ class Router(BaseRouterWithConfig):
             time_to_expire = self._get_time_to_expire(ms=ms, use_default=True)
         except CommunicationTimeoutError as e:
             remove_task_inner()
-            logger.error(e.message)
+            self._expired_on_arrival += 1
+            n = self._expired_on_arrival
+            if n == 1 or n % 100 == 0:
+                logger.warning(f"Request already expired on arrival, dropped without solving "
+                               f"({n} since start). Last: {e.message}")
             return
         try:
             answer = await wait_for_psce(self._solve_request(ms), timeout=time_to_expire)
@@ -155,7 +164,11 @@ class Router(BaseRouterWithConfig):
         except asyncio.TimeoutError:
             # remove to slow task from list
             remove_task_inner()
-            logger.error(f"Handling the request has timed out. Stop handling this task.")
+            self._solve_timeouts += 1
+            n = self._solve_timeouts
+            if n == 1 or n % 100 == 0:
+                logger.warning(f"Handling the request has timed out, response dropped "
+                               f"({n} since start).")
             return
         except Exception as e:
             # shouldn't have happened

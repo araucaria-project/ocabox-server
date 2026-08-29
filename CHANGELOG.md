@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 ### Added
+- **Deadline shedding** (rollout flag `TreeAlpacaObservatory.shed_expired_requests`,
+  default off): a request whose absolute deadline already passed while queued is
+  refused with `4004 TEMPORARY` *before* any device I/O. Previously an expired
+  request still spawned the Alpaca HTTP coroutine only to cancel it.
 - **Negative caching in `TreeCache`** (rollout flag `TreeCache.negative_cache.enabled`,
   default off): a failure from the subcontractor (default codes 2002, 2003,
   4002, 4005, 4009 — device/transport only) is remembered per address and served
@@ -23,6 +27,9 @@ All notable changes to this project will be documented in this file.
 - `TreeCache._known_values` is a dict keyed by `str(address)` (was: list with
   linear scan + `Address.__eq__` per lookup — visible in production CPU
   profiles). New `_add_known_value()` is the single insertion point.
+- Router drop paths (request expired on arrival; solve timeout) now log a
+  throttled summary (first + every 100th, WARNING) with counters instead of a
+  per-message ERROR — a client avalanche can no longer flood the journal.
 ...
 
 ## [2.4.0]
