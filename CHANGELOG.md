@@ -8,7 +8,15 @@ All notable changes to this project will be documented in this file.
   4002, 4005, 4009 — device/transport only) is remembered per address and served
   back fail-fast (same error code, message tagged `[negative-cache: …]`) until
   its TTL passes; TTL escalates 2× per consecutive failure (`ttl_initial` 1 s →
-  `ttl_max` 30 s) and one probe per TTL re-checks the device. Success clears the
+  `ttl_max` 10 s — bounded by how long a human who just fixed a device is
+  willing to wait for the status to catch up) and one probe per TTL re-checks
+  the device. TTL deadlines use `time.monotonic()` (immune to clock steps) and
+  the escalation exponent is capped (a months-long outage must not overflow
+  `2**fail_count`). Errors served from the negative cache carry
+  `from_negative_cache=True` in kwargs, and `TreeConditionalFreezer` does
+  **not** count them toward `nr_of_unsuccessful_refreshes` — the failure
+  counter advances only on real device probes, so fail-fast errors cannot race
+  subscriptions to `2003` during short blips. Success clears the
   state and logs recovery. Stops a dead TCU from being re-probed by every
   request while keeping the client contract unchanged.
 ### Changed

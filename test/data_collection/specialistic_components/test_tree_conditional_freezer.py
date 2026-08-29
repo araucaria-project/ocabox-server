@@ -415,5 +415,56 @@ class TestTreeConditionalFreezer(unittest.TestCase):
         self.assertEqual(len(self.tree_cache._known_values), 1)
 
 
+class TestFreezerNegativeCacheInterplay(unittest.TestCase):
+    """Errors served from TreeCache's negative cache (from_negative_cache=True)
+    must NOT advance the freezer's failure counter — otherwise fail-fast errors
+    race the counter to 2003 during blips that today ride through unnoticed.
+    Expected here: subscription times out (4004) with exactly 1 counted failure
+    (the single real probe), instead of hitting max_unsuccessful_refreshes."""
+
+    class AlwaysFailingProvider(TreeProvider):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = 0
+
+        async def get_value(self, request: ValueRequest, **kwargs) -> Value or None:
+            from obcom.data_colection.coded_error import TreeOtherError
+            self.calls += 1
+            raise TreeOtherError(code=4005, message='device down', severity='NORMAL')
+
+    def test_cached_echo_does_not_advance_counter(self):
+        provider = self.AlwaysFailingProvider('failing', 'provider2')
+        cache = TreeCache('cache', provider)
+        cache._neg_enabled = True
+        cache._neg_ttl_initial = 30.0            # one real probe, everything after is an echo
+        cache._neg_ttl_max = 30.0
+        freezer = TreeConditionalFreezer('test_sample_freezer', cache)
+        freezer.set_max_refreshes(2)
+        freezer._min_time_of_data_tolerance = 0.05
+        freezer._alarm_timeout_offset = 0.1      # default 2s would eat the whole test budget
+        root = TreeProvider('root', 'provider1', freezer)
+
+        address = Address('provider1.provider2.derror_val')
+        request = ValueRequest(address, time.time(),
+                               time_of_data_tolerance=0.05,
+                               request_timeout=time.time() + 0.9,
+                               request_data={'time_of_known_change': None},
+                               cycle_query=True)
+
+        async def scenario():
+            try:
+                await root.run()
+                return await root.get_response(request)
+            finally:
+                await root.stop()
+
+        response = asyncio.run(scenario())
+        self.assertFalse(response.status)
+        self.assertEqual(response.error.code, 4004,
+                         f'expected subscription timeout, got {response.error.code}: {response.error.message}')
+        self.assertEqual(response.error.kwargs.get('nr_of_unsuccessful_refreshes'), 1)
+        self.assertEqual(provider.calls, 1)      # exactly one real device probe
+
+
 if __name__ == '__main__':
     unittest.main()

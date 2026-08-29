@@ -260,8 +260,6 @@ class TreeCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.tree_cache.is_cachable_request(request=request))
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class TreeCacheNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
@@ -308,12 +306,11 @@ class TreeCacheNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
     async def test_ttl_expiry_reprobes_and_escalates(self):
         await self.cache.get_response(self._request())
         kv = self.cache.get_k_val(Address('sample_telescope.derror_val'))
-        first_until = kv.neg_until
         await asyncio.sleep(0.12)                          # ttl_initial passed
         await self.cache.get_response(self._request())     # re-probe -> fail #2
         self.assertEqual(self.provider.calls, 2)
         self.assertEqual(kv.fail_count, 2)
-        self.assertGreater(kv.neg_until - time.time(), 0.15)  # escalated ~0.2s
+        self.assertGreater(kv.neg_until - time.monotonic(), 0.15)  # escalated ~0.2s
 
     async def test_success_resets_negative_state(self):
         await self.cache.get_response(self._request())
@@ -344,3 +341,30 @@ class TreeCacheNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
         await self.cache.get_response(self._request())
         await self.cache.get_response(self._request())
         self.assertEqual(self.provider.calls, 2)           # never served from negative cache
+
+
+
+
+class TreeCacheNegativeOverflowTest(unittest.IsolatedAsyncioTestCase):
+    """A months-long outage must not overflow the TTL exponent (float 2**1024)."""
+
+    async def test_huge_fail_count_saturates_ttl(self):
+        provider = TreeCacheNegativeCacheTest.FailingProvider('failing_provider', 'sample_telescope')
+        cache = TreeCache('test_cache', provider)
+        cache._neg_enabled = True
+        cache._neg_ttl_initial = 1.0
+        cache._neg_ttl_max = 10.0
+        def request():  # fresh request each time — dispatch advances request.index
+            return ValueRequest(Address('sample_telescope.derror_val'), time.time())
+        await cache.get_response(request())
+        kv = cache.get_k_val(Address('sample_telescope.derror_val'))
+        kv.fail_count = 5000                     # simulate a very long outage
+        kv.neg_until = 0.0                       # force a re-probe
+        await cache.get_response(request())      # must not raise OverflowError
+        self.assertEqual(kv.fail_count, 5001)
+        self.assertLessEqual(kv.neg_until - time.monotonic(), 10.0 + 0.1)
+
+
+
+if __name__ == '__main__':
+    unittest.main()

@@ -92,7 +92,7 @@ data_collection:
     negative_cache:
       enabled: false
       ttl_initial: 1.0
-      ttl_max: 30.0
+      ttl_max: 10.0  # bounded by how long a human who just fixed a device is willing to wait
       codes: [2002, 2003, 4002, 4005, 4009]
   TreeCCTV:   # Ubiquity CCTV camera
     udm_camera_id: ''

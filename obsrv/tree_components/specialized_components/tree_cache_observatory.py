@@ -1,11 +1,12 @@
 import asyncio
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import logging
 from asyncio import Task
-from typing import Dict, List
+from typing import Dict, Optional
 from obcom.data_colection.address import Address
+from obcom.data_colection.response_error import ResponseError
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
 from obsrv.tree_components.base_components.tree_component import ProvidesResponseProtocol
 from obcom.data_colection.coded_error import TreeStructureError, TreeOtherError
@@ -50,7 +51,7 @@ class TreeCache(TreeBaseProvider):
         neg_cfg = self._get_cfg("negative_cache", None) or {}
         self._neg_enabled: bool = bool(neg_cfg.get('enabled', False))
         self._neg_ttl_initial: float = float(neg_cfg.get('ttl_initial', 1.0))
-        self._neg_ttl_max: float = float(neg_cfg.get('ttl_max', 30.0))
+        self._neg_ttl_max: float = float(neg_cfg.get('ttl_max', 10.0))
         # Only device/transport-shaped failures are negative-cachable. Permanent
         # config errors (1xxx, 3002) and per-user denials must never be cached.
         self._neg_codes = set(neg_cfg.get('codes', [2002, 2003, 4002, 4005, 4009]))
@@ -61,9 +62,10 @@ class TreeCache(TreeBaseProvider):
         value: Value or None
         task: Task or None
         change_time: float
-        # negative-cache state (active when neg_error is not None and now < neg_until)
-        neg_error = None  # last ResponseError from the subcontractor
-        neg_until: float = 0.0
+        # negative-cache state (active when neg_error is not None and
+        # time.monotonic() < neg_until — monotonic, immune to clock steps)
+        neg_error: Optional[ResponseError] = None  # last ResponseError from the subcontractor
+        neg_until: float = 0.0  # time.monotonic() deadline
         fail_count: int = 0
 
         def get_change_time(self) -> float:
@@ -109,16 +111,19 @@ class TreeCache(TreeBaseProvider):
                 logger.info(f'Retry retrieving content from the cache but a value was not supplied by the previous '
                             f'task. Nr recall {recall} / {self._max_recall}')
         if self._neg_enabled and known_value.neg_error is not None:
-            remaining = known_value.neg_until - time.time()
+            remaining = known_value.neg_until - time.monotonic()
             if remaining > 0:
                 # The source failed fail_count times in a row and its negative TTL
                 # has not passed — answer with the remembered error immediately
                 # instead of queuing more device I/O behind a known failure.
+                # `from_negative_cache` marks this as an echo of an already-counted
+                # failure: the freezer must not treat it as new device evidence.
                 ne = known_value.neg_error
                 message = (f"{ne.message} [negative-cache: {known_value.fail_count} consecutive "
                            f"failures, next probe in {remaining:.1f}s]")
                 exc_cls = TreeValueError if 2000 <= ne.code < 3000 else TreeOtherError
-                raise exc_cls(code=ne.code, message=message, severity=ne.severity)
+                raise exc_cls(code=ne.code, message=message, severity=ne.severity,
+                              from_negative_cache=True)
         task = known_value.task
         # not found and no one asks about it
         if not task or task.done():
@@ -154,7 +159,7 @@ class TreeCache(TreeBaseProvider):
             return
         kv = self._find_in_known_values(result.address)
         if not kv:
-            logger.error(f'Can not find current value in list cached values and should be')
+            logger.error(f'Can not find current value among cached known values and should be')
         await self._update_known_value(result.address, result.value, kv)
         if self._neg_enabled and kv is not None:
             if result.status:
@@ -166,8 +171,11 @@ class TreeCache(TreeBaseProvider):
                 kv.fail_count = 0
             elif result.error is not None and result.error.code in self._neg_codes:
                 kv.fail_count += 1
-                ttl = min(self._neg_ttl_initial * (2 ** (kv.fail_count - 1)), self._neg_ttl_max)
-                kv.neg_until = time.time() + ttl
+                # cap the exponent: 2**large overflows float and fail_count grows
+                # unbounded during a long outage (one probe per ttl_max)
+                exponent = min(kv.fail_count - 1, 16)
+                ttl = min(self._neg_ttl_initial * (2 ** exponent), self._neg_ttl_max)
+                kv.neg_until = time.monotonic() + ttl
                 kv.neg_error = result.error
                 if kv.fail_count == 1:
                     logger.info(f'{result.address}: failure cached (code {result.error.code}), '
