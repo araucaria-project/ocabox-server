@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Added
+- **Negative caching in `TreeCache`** (rollout flag `TreeCache.negative_cache.enabled`,
+  default off): a failure from the subcontractor (default codes 2002, 2003,
+  4002, 4005, 4009 — device/transport only) is remembered per address and served
+  back fail-fast (same error code, message tagged `[negative-cache: …]`) until
+  its TTL passes; TTL escalates 2× per consecutive failure (`ttl_initial` 1 s →
+  `ttl_max` 30 s) and one probe per TTL re-checks the device. Success clears the
+  state and logs recovery. Stops a dead TCU from being re-probed by every
+  request while keeping the client contract unchanged.
+### Changed
+- `TreeCache._known_values` is a dict keyed by `str(address)` (was: list with
+  linear scan + `Address.__eq__` per lookup — visible in production CPU
+  profiles). New `_add_known_value()` is the single insertion point.
 ...
 
 ## [2.4.0]

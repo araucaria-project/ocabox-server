@@ -79,8 +79,8 @@ class TreeCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(tc._known_values) == 0)
         asyncio.run(tc._update_known_value(address, self.v1[1]))
         self.assertTrue(len(tc._known_values) == 1)
-        self.assertEqual(tc._known_values[0].value, self.v1[1])
-        self.assertEqual(tc._known_values[0].address, address)
+        self.assertEqual(tc._known_values[str(address)].value, self.v1[1])
+        self.assertEqual(tc._known_values[str(address)].address, address)
 
         # test add new value
         address2 = Address('.'.join(['sample_address', self.v2[0]]))
@@ -95,8 +95,8 @@ class TreeCacheTest(unittest.IsolatedAsyncioTestCase):
         asyncio.run(tc._update_known_value(address2, v2))
 
         self.assertTrue(len(tc._known_values) == 2)
-        self.assertEqual(tc._known_values[1].value, v2)
-        self.assertEqual(tc._known_values[1].address, address2)
+        self.assertEqual(tc._known_values[str(address2)].value, v2)
+        self.assertEqual(tc._known_values[str(address2)].address, address2)
 
         # test do not change value to older
         address2 = Address('.'.join(['sample_address', self.v2[0]]))
@@ -106,8 +106,8 @@ class TreeCacheTest(unittest.IsolatedAsyncioTestCase):
         asyncio.run(tc._update_known_value(address2, v3))
 
         self.assertTrue(len(tc._known_values) == 2)
-        self.assertNotEqual(tc._known_values[1].value, v3)
-        self.assertEqual(tc._known_values[1].address, address2)
+        self.assertNotEqual(tc._known_values[str(address2)].value, v3)
+        self.assertEqual(tc._known_values[str(address2)].address, address2)
 
     def test_flow_empty_cache(self):
         """
@@ -262,3 +262,85 @@ class TreeCacheTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TreeCacheNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
+    """Negative caching: a failure from the subcontractor is remembered and
+    served fail-fast (same code) until its TTL passes; success resets state."""
+
+    class FailingProvider(TreeProvider):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.calls = 0
+            self.fail = True
+            self.error_code = 4005
+
+        async def get_value(self, request: ValueRequest, **kwargs) -> Value or None:
+            from obcom.data_colection.coded_error import TreeOtherError
+            self.calls += 1
+            if self.fail:
+                raise TreeOtherError(code=self.error_code, message='device down', severity='NORMAL')
+            return Value('recovered', time.time())
+
+    def setUp(self):
+        super().setUp()
+        self.provider = self.FailingProvider('failing_provider', 'sample_telescope')
+        self.cache = TreeCache('test_cache', self.provider)
+        self.cache._neg_enabled = True
+        self.cache._neg_ttl_initial = 0.1
+        self.cache._neg_ttl_max = 0.4
+
+    def _request(self) -> ValueRequest:
+        return ValueRequest(Address('sample_telescope.derror_val'), time.time())
+
+    async def test_failure_is_cached_and_served_without_probing(self):
+        r1 = await self.cache.get_response(self._request())
+        self.assertFalse(r1.status)
+        self.assertEqual(r1.error.code, 4005)
+        self.assertEqual(self.provider.calls, 1)
+
+        r2 = await self.cache.get_response(self._request())
+        self.assertFalse(r2.status)
+        self.assertEqual(r2.error.code, 4005)              # same code as the origin
+        self.assertIn('negative-cache', r2.error.message)  # but served from cache
+        self.assertEqual(self.provider.calls, 1)           # no second device probe
+
+    async def test_ttl_expiry_reprobes_and_escalates(self):
+        await self.cache.get_response(self._request())
+        kv = self.cache.get_k_val(Address('sample_telescope.derror_val'))
+        first_until = kv.neg_until
+        await asyncio.sleep(0.12)                          # ttl_initial passed
+        await self.cache.get_response(self._request())     # re-probe -> fail #2
+        self.assertEqual(self.provider.calls, 2)
+        self.assertEqual(kv.fail_count, 2)
+        self.assertGreater(kv.neg_until - time.time(), 0.15)  # escalated ~0.2s
+
+    async def test_success_resets_negative_state(self):
+        await self.cache.get_response(self._request())
+        self.provider.fail = False
+        await asyncio.sleep(0.12)
+        r = await self.cache.get_response(self._request())
+        self.assertTrue(r.status)
+        self.assertEqual(r.value.v, 'recovered')
+        kv = self.cache.get_k_val(Address('sample_telescope.derror_val'))
+        self.assertEqual(kv.fail_count, 0)
+        self.assertIsNone(kv.neg_error)
+
+    async def test_flag_off_probes_every_time(self):
+        self.cache._neg_enabled = False
+        await self.cache.get_response(self._request())
+        await self.cache.get_response(self._request())
+        self.assertEqual(self.provider.calls, 2)
+
+    async def test_unlisted_code_is_not_cached(self):
+        self.provider.error_code = 1002                    # permanent address error
+        # provider raises AddressError-shaped code via TreeOtherError group? use direct:
+        from obcom.data_colection.address import AddressError
+
+        async def get_value(request, **kwargs):
+            self.provider.calls += 1
+            raise AddressError(address=request.address, code=1002, message='no such component')
+        self.provider.get_value = get_value
+        await self.cache.get_response(self._request())
+        await self.cache.get_response(self._request())
+        self.assertEqual(self.provider.calls, 2)           # never served from negative cache

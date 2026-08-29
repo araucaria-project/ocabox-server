@@ -107,7 +107,7 @@ class TestTreeConditionalFreezer(unittest.TestCase):
                                request_data={'time_of_known_change': None},
                                cycle_query=True)
         # initialize cache list witch empty value
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address, value=None,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address, value=None,
                                                                          task=None, change_time=0))
         response = asyncio.run(self._start_stop_tree(self.tree_provider1.get_response(request)))
 
@@ -132,7 +132,7 @@ class TestTreeConditionalFreezer(unittest.TestCase):
                                request_data={'time_of_known_change': None, 'raise_value_error': True},
                                cycle_query=True)
         # initialize cache list witch empty value
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address, value=None,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address, value=None,
                                                                          task=None, change_time=0))
 
         logger.warning('Time test started - may take a while to complete')
@@ -168,7 +168,7 @@ class TestTreeConditionalFreezer(unittest.TestCase):
                                cycle_query=True,
                                request_timeout=request_timeout)
         # initialize cache list witch some value - this value will never change
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address,
                                                                          value=Value(v=self.tree_provider2.static_val,
                                                                                      ts=current_time),
                                                                          task=None, change_time=current_time))
@@ -203,7 +203,7 @@ class TestTreeConditionalFreezer(unittest.TestCase):
                                cycle_query=True)
         # initialize cache list witch some value - here was set 6000 because provider can generate value from 0 to 1000,
         # so we make sure that the value will not be the same
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address,
                                                                          value=Value(v=6000, ts=current_time),
                                                                          task=None, change_time=current_time))
 
@@ -232,7 +232,7 @@ class TestTreeConditionalFreezer(unittest.TestCase):
                                cycle_query=True)
         # initialize cache list witch some value - here was set 6000 because provider can generate value from 0 to 1000,
         # so we make sure that the value will not be the same
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address,
                                                                          value=Value(v=6000, ts=current_time),
                                                                          task=None, change_time=current_time))
         logger.warning('Time test started - may take a while to complete')
@@ -290,7 +290,7 @@ class TestTreeConditionalFreezer(unittest.TestCase):
                                request_data={'time_of_known_change': current_time, 'raise_structure_error': True},
                                cycle_query=True)
         # simulates that the cache has the old values
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address,
                                                                          value=Value(v=6000, ts=current_time),
                                                                          task=None, change_time=current_time))
         logger.warning('Time test started - may take a while to complete')
@@ -337,7 +337,7 @@ class TestTreeConditionalFreezer(unittest.TestCase):
                                 request_data={'time_of_known_change': current_time},
                                 cycle_query=True)
         # simulates that the cache has the old values
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address,
                                                                          value=Value(v=6000, ts=current_time),
                                                                          task=None, change_time=current_time))
 
@@ -390,7 +390,7 @@ class TestTreeConditionalFreezer(unittest.TestCase):
                                request_data={'time_of_known_change': current_time},
                                cycle_query=True)
         # simulates that the cache has the old values
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address,
                                                                          value=Value(v=6000, ts=current_time),
                                                                          task=None, change_time=current_time))
 

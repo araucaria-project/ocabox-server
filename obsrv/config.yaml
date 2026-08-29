@@ -85,6 +85,15 @@ data_collection:
     no_cachable_regex:
       # is_access is per-user (answers "does THIS user own the blocker?"); a shared cache would lie.
       - .*\.is_access$
+    # Negative caching (rollout flag): serve a remembered failure (same error
+    # code, fail-fast) instead of re-probing a dead device on every request.
+    # TTL escalates 2x per consecutive failure up to ttl_max; success resets.
+    # Codes: device/transport failures only — never 1xxx/3002/per-user denials.
+    negative_cache:
+      enabled: false
+      ttl_initial: 1.0
+      ttl_max: 30.0
+      codes: [2002, 2003, 4002, 4005, 4009]
   TreeCCTV:   # Ubiquity CCTV camera
     udm_camera_id: ''
     udm_host: ''
