@@ -7,7 +7,26 @@ All notable changes to this project will be documented in this file.
   default off): a request whose absolute deadline already passed while queued is
   refused with `4004 TEMPORARY` *before* any device I/O. Previously an expired
   request still spawned the Alpaca HTTP coroutine only to cancel it.
+- **Negative caching in `TreeCache`** (rollout flag `TreeCache.negative_cache.enabled`,
+  default off): a failure from the subcontractor (default codes 2002, 2003,
+  4002, 4005, 4009 — device/transport only) is remembered per address and served
+  back fail-fast (same error code, message tagged `[negative-cache: …]`) until
+  its TTL passes; TTL escalates 2× per consecutive failure (`ttl_initial` 1 s →
+  `ttl_max` 10 s — bounded by how long a human who just fixed a device is
+  willing to wait for the status to catch up) and one probe per TTL re-checks
+  the device. TTL deadlines use `time.monotonic()` (immune to clock steps) and
+  the escalation exponent is capped (a months-long outage must not overflow
+  `2**fail_count`). Errors served from the negative cache carry
+  `from_negative_cache=True` in kwargs, and `TreeConditionalFreezer` does
+  **not** count them toward `nr_of_unsuccessful_refreshes` — the failure
+  counter advances only on real device probes, so fail-fast errors cannot race
+  subscriptions to `2003` during short blips. Success clears the
+  state and logs recovery. Stops a dead TCU from being re-probed by every
+  request while keeping the client contract unchanged.
 ### Changed
+- `TreeCache._known_values` is a dict keyed by `str(address)` (was: list with
+  linear scan + `Address.__eq__` per lookup — visible in production CPU
+  profiles). New `_add_known_value()` is the single insertion point.
 - Router drop paths (request expired on arrival; solve timeout) now log a
   throttled summary (first + every 100th, WARNING) with counters instead of a
   per-message ERROR — a client avalanche can no longer flood the journal.

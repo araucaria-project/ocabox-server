@@ -167,7 +167,15 @@ class TreeConditionalFreezer(TreeBaseProvider):
             else:
                 logger.info(f'Can not update value in cache: {request.address}')
                 wait_offset_error = t_tolerance
-                nr_of_unsuccessful_refreshes += 1
+                if err is not None and err.kwargs.get('from_negative_cache'):
+                    # Echo of an already-counted failure served from TreeCache's
+                    # negative cache — pacing applies, but it is not new device
+                    # evidence, so it must not advance the failure counter
+                    # (otherwise fail-fast errors would race the counter to 2003
+                    # during blips that today ride through unnoticed).
+                    pass
+                else:
+                    nr_of_unsuccessful_refreshes += 1
                 if err is not None:
                     if highest_update_error_severity is None or \
                             ResponseError.compare_severity(err.severity, highest_update_error_severity):
