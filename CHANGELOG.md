@@ -2,10 +2,11 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [2.5.1]
 ### Fixed
-- **astropy 8 compatibility**: (`tree_ephemeris` imported `get_moon`, removed in
-  astropy 7)
-...
+- **astropy 8 compatibility**: `tree_ephemeris` used `get_moon` (removed in astropy 7);
+  replaced with `get_body("moon", ...)`, compatible with astropy 5–8.
 
 ## [2.5.0]
 ### Added
