@@ -1,16 +1,18 @@
 import asyncio
 import re
+import time
 from dataclasses import dataclass
 import logging
 from asyncio import Task
-from typing import List
+from typing import Dict, Optional
 from obcom.data_colection.address import Address
+from obcom.data_colection.response_error import ResponseError
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
 from obsrv.tree_components.base_components.tree_component import ProvidesResponseProtocol
-from obcom.data_colection.coded_error import TreeStructureError
+from obcom.data_colection.coded_error import TreeStructureError, TreeOtherError
 from obsrv.tree_components.specialized_components.tree_cache_observatory_protocols import KnownValueProtocol
 from obsrv.tree_components.specialized_components.tree_conditional_freezer_protocol import TreeConditionalFreezerProtocol
-from obcom.data_colection.value import Value
+from obcom.data_colection.value import Value, TreeValueError
 from obcom.data_colection.value_call import ValueRequest, ValueResponse
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
@@ -30,7 +32,9 @@ class TreeCache(TreeBaseProvider):
 
     def __init__(self, component_name: str, subcontractor: ProvidesResponseProtocol = None, **kwargs):
         super().__init__(component_name=component_name, subcontractor=subcontractor, **kwargs)
-        self._known_values: List[TreeCache._KnownValue] = []  # list (address :Address, value: Value, task: Task)
+        # Keyed by str(address): lookups are hot (every GET) and a linear list
+        # scan with Address.__eq__ showed up in production profiles.
+        self._known_values: Dict[str, TreeCache._KnownValue] = {}
         self._max_recall = 1  # After how many times he waits for the previous task, he asks yourself.
         if self._max_recall < 1:
             logger.warning(f"The _max_recall value is lover than one. It is unacceptable so will be set to 1 !")
@@ -39,6 +43,18 @@ class TreeCache(TreeBaseProvider):
         # self._no_cachable_address = []
         self._no_cachable_regex = []
         self._load_no_cachable_address()
+        # Negative caching (rollout flag, default off): remember a *failure* from
+        # the subcontractor and serve it back (fail-fast, same error code) until
+        # its TTL passes, instead of letting every request penetrate to a dead
+        # device. TTL escalates per consecutive failure and resets on success.
+        # See the TIC Hardening 2026-08-29 register.
+        neg_cfg = self._get_cfg("negative_cache", None) or {}
+        self._neg_enabled: bool = bool(neg_cfg.get('enabled', False))
+        self._neg_ttl_initial: float = float(neg_cfg.get('ttl_initial', 1.0))
+        self._neg_ttl_max: float = float(neg_cfg.get('ttl_max', 10.0))
+        # Only device/transport-shaped failures are negative-cachable. Permanent
+        # config errors (1xxx, 3002) and per-user denials must never be cached.
+        self._neg_codes = set(neg_cfg.get('codes', [2002, 2003, 4002, 4005, 4009]))
 
     @dataclass
     class _KnownValue:
@@ -46,6 +62,11 @@ class TreeCache(TreeBaseProvider):
         value: Value or None
         task: Task or None
         change_time: float
+        # negative-cache state (active when neg_error is not None and
+        # time.monotonic() < neg_until — monotonic, immune to clock steps)
+        neg_error: Optional[ResponseError] = None  # last ResponseError from the subcontractor
+        neg_until: float = 0.0  # time.monotonic() deadline
+        fail_count: int = 0
 
         def get_change_time(self) -> float:
             return self.change_time
@@ -57,6 +78,11 @@ class TreeCache(TreeBaseProvider):
 
         def get_value(self) -> Value:
             return self.value
+
+    def _add_known_value(self, kv: '_KnownValue') -> '_KnownValue':
+        """Insert a _KnownValue under its address key and return it."""
+        self._known_values[str(kv.address)] = kv
+        return kv
 
     def _load_no_cachable_address(self):
         # self._no_cachable_address = self._get_cfg("no_cachable_address", [])
@@ -72,8 +98,8 @@ class TreeCache(TreeBaseProvider):
         known_value = self._find_in_known_values(address)
         if not known_value:
             # Initializing this value even when it cannot be updated later means the request is cachable
-            known_value = self._KnownValue(address=address, value=None, task=None, change_time=0)
-            self._known_values.append(known_value)
+            known_value = self._add_known_value(
+                self._KnownValue(address=address, value=None, task=None, change_time=0))
         value = known_value.value if self._value_meets_requirements(known_value, request.time_of_data,
                                                                     request.time_of_data_tolerance) else None
         # found in known values
@@ -84,6 +110,20 @@ class TreeCache(TreeBaseProvider):
                 # The newly downloaded value does not meet the requirements
                 logger.info(f'Retry retrieving content from the cache but a value was not supplied by the previous '
                             f'task. Nr recall {recall} / {self._max_recall}')
+        if self._neg_enabled and known_value.neg_error is not None:
+            remaining = known_value.neg_until - time.monotonic()
+            if remaining > 0:
+                # The source failed fail_count times in a row and its negative TTL
+                # has not passed — answer with the remembered error immediately
+                # instead of queuing more device I/O behind a known failure.
+                # `from_negative_cache` marks this as an echo of an already-counted
+                # failure: the freezer must not treat it as new device evidence.
+                ne = known_value.neg_error
+                message = (f"{ne.message} [negative-cache: {known_value.fail_count} consecutive "
+                           f"failures, next probe in {remaining:.1f}s]")
+                exc_cls = TreeValueError if 2000 <= ne.code < 3000 else TreeOtherError
+                raise exc_cls(code=ne.code, message=message, severity=ne.severity,
+                              from_negative_cache=True)
         task = known_value.task
         # not found and no one asks about it
         if not task or task.done():
@@ -119,8 +159,27 @@ class TreeCache(TreeBaseProvider):
             return
         kv = self._find_in_known_values(result.address)
         if not kv:
-            logger.error(f'Can not find current value in list cached values and should be')
+            logger.error(f'Can not find current value among cached known values and should be')
         await self._update_known_value(result.address, result.value, kv)
+        if self._neg_enabled and kv is not None:
+            if result.status:
+                if kv.fail_count:
+                    logger.info(f'{result.address}: source recovered after {kv.fail_count} '
+                                f'consecutive failures, negative cache cleared')
+                kv.neg_error = None
+                kv.neg_until = 0.0
+                kv.fail_count = 0
+            elif result.error is not None and result.error.code in self._neg_codes:
+                kv.fail_count += 1
+                # cap the exponent: 2**large overflows float and fail_count grows
+                # unbounded during a long outage (one probe per ttl_max)
+                exponent = min(kv.fail_count - 1, 16)
+                ttl = min(self._neg_ttl_initial * (2 ** exponent), self._neg_ttl_max)
+                kv.neg_until = time.monotonic() + ttl
+                kv.neg_error = result.error
+                if kv.fail_count == 1:
+                    logger.info(f'{result.address}: failure cached (code {result.error.code}), '
+                                f'serving it for {ttl:.1f}s before next probe')
         self._remove_the_value_lock(result.address, kv)
 
     def _find_in_known_values(self, address: Address) -> _KnownValue or None:
@@ -130,12 +189,7 @@ class TreeCache(TreeBaseProvider):
         :param address: Address
         :return: object representing stored value for given address or None if not exists
         """
-        # check if the value is in cache
-        for kv in self._known_values:
-            if kv.address == address:
-                return kv
-        #  return None if value is not in cache
-        return None
+        return self._known_values.get(str(address))
 
     @staticmethod
     def _value_meets_requirements(kv: _KnownValue, ts: float, delta: float):
@@ -169,7 +223,7 @@ class TreeCache(TreeBaseProvider):
             # if value isn't on list yet
             if not kv:
                 kv = self._KnownValue(address=address, value=value, task=None, change_time=value.ts)  # first initial
-                self._known_values.append(kv)
+                self._add_known_value(kv)
                 return
             # if new provided data is earlier than the date currently stored in list
             if not kv.value:

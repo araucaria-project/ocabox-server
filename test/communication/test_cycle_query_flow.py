@@ -162,7 +162,7 @@ class TestConditionalCycleQueryFlow(unittest.TestCase):
         request2 = request.copy()
         request2.time_of_data_tolerance = time_of_data_tolerance2
         # initialize cache list witch some value
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address,
                                                                          value=Value(v=6000, ts=current_time),
                                                                          task=None, change_time=current_time))
         delay = 0.3
@@ -207,7 +207,7 @@ class TestConditionalCycleQueryFlow(unittest.TestCase):
                                cycle_query=True)
         self.tree_freezer._alarm_timeout_offset = time_expire / 2  # set short time to expire
         # initialize cache list witch some value
-        self.tree_cache._known_values.append(self.tree_cache._KnownValue(address=address,
+        self.tree_cache._add_known_value(self.tree_cache._KnownValue(address=address,
                                                                          value=Value(v=1, ts=current_time),
                                                                          task=None, change_time=current_time))
         delay = 0.2
