@@ -120,8 +120,6 @@ class TreeAlpacaTest(unittest.IsolatedAsyncioTestCase):
         self.assertDictEqual(cfg.get("sample_component").get("child"), {})
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class TreeAlpacaDeadlineSheddingTest(unittest.IsolatedAsyncioTestCase):
@@ -170,3 +168,7 @@ class TreeAlpacaDeadlineSheddingTest(unittest.IsolatedAsyncioTestCase):
         response = await self.tao.get_response(request)
         if not response.status:
             self.assertNotEqual(response.error.code, 4004)
+
+
+if __name__ == '__main__':
+    unittest.main()
