@@ -6,7 +6,7 @@ import logging
 import param
 import time as time_module
 from typing import Awaitable, Callable, ClassVar, Optional
-from astropy.coordinates import EarthLocation, get_moon, get_sun, AltAz, SkyCoord
+from astropy.coordinates import EarthLocation, get_body, get_sun, AltAz, SkyCoord
 from astropy.time import Time
 from obcom.data_colection.address import AddressError
 from obsrv.tree_components.base_components.tree_provider import TreeProvider
@@ -54,7 +54,9 @@ class EphemerisData(OcaboxTask):
 
     @functools.lru_cache()
     def _get_moon(self, time: Time) -> SkyCoord:
-        return get_moon(time)
+        # get_moon() was removed in astropy 7 (deprecated since 5.0);
+        # get_body("moon", ...) is the supported equivalent on astropy 5-8.
+        return get_body("moon", time)
 
     @functools.lru_cache()
     def _get_sun(self, time: Time) -> SkyCoord:
