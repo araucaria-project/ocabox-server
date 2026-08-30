@@ -468,3 +468,15 @@ class TestFreezerNegativeCacheInterplay(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestValuePolicyFieldReserved(unittest.TestCase):
+    """Phase 0 of the Staleness Contract (#39): `value_policy` must be stripped
+    from request arguments before they reach protocol connectors."""
+
+    def test_value_policy_is_stripped(self):
+        from obsrv.tree_components.specialized_components.tree_conditional_freezer import (
+            strip_tree_internal_fields)
+        args = {'value_policy': 'none', 'real_param': 1}
+        out = strip_tree_internal_fields(args)
+        self.assertEqual(out, {'real_param': 1})

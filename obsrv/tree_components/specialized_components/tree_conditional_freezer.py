@@ -26,6 +26,10 @@ TREE_INTERNAL_REQUEST_FIELDS = frozenset({
     'time_of_known_change',
     'no_send_before',
     'nr_of_unsuccessful_refreshes',
+    # Reserved for the Staleness Contract (ocabox-common#8, phase 0/#39):
+    # future clients send their value policy here; servers of this line strip
+    # it so it can never leak to strict ASCOM drivers (the 2.3.12 bug class).
+    'value_policy',
 })
 
 
