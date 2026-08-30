@@ -157,6 +157,38 @@ PMS-like consumers should treat any `status=False` callback as terminal for that
 - `severity == TEMPORARY` — shouldn't reach the callback. If it does, log and ignore.
 - Otherwise — subscription has already stopped. Per-service decision whether to retry after cooldown.
 
+## Staleness Contract — server-side enforcement (2.6.0)
+
+Full design: vault `Architecture/Staleness Contract (unified read policy)`.
+Applies **only** to subscription requests that declare `value_policy` in
+`request_data` (undeclared requests keep the historical counter path, byte
+for byte). Two request fields drive it: `time_of_data_tolerance` (T1 — the
+healthy refresh cadence, unchanged) and `time_of_data_max_age` (T2 — the
+truth bound, defaulted to `2*T1` when absent).
+
+The freezer's decision after a failed refresh (`_stale_verdict`):
+
+| Condition | Delivered |
+|---|---|
+| failure severity CRITICAL | `2003` immediately, tolerance notwithstanding |
+| cache younger than T2 | nothing — masked; retried at `(T2−T1)/4` cadence |
+| past T2, `value_policy=none` | **rich None**: `Value(None, ts=now, tags={reason: <code>, last_good, last_good_ts, from_cf})` with `status=True`, delivered once per outage episode |
+| past T2, `value_policy=raise` | `2003` with the highest failure severity seen |
+| `value_policy=last_good` | nothing, ever — the value ages on |
+
+Notes for maintainers:
+- The stale-None dedup is stateless: the client echoes the None's ts as
+  `time_of_known_change`, which is newer than the cache's frozen refresh
+  timestamp — that inversion means "this client already knows".
+- Recovery is delivered because **TreeCache bumps `change_time` on the first
+  successful refresh after a failure episode** even for an equal payload
+  (`had_failure` flag) — this also wakes legacy subscribers after an outage.
+- `max_unsuccessful_refreshes` (and its 2003) is retired for declared
+  requests; the T2 clock replaces it (resolves #28 for opted-in clients).
+- `value_policy` is in `TREE_INTERNAL_REQUEST_FIELDS` — stripped before
+  connectors (the 2.3.12 rule). `time_of_data_max_age` is a plain
+  `ValueRequest` field and never reaches connectors at all.
+
 ## Cross-links
 
 - Ecosystem vault: `Architecture/Error Model across ocabox ecosystem.md` — historical record and cross-project context.
