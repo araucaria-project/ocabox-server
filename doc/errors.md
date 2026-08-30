@@ -174,7 +174,7 @@ The freezer's decision after a failed refresh (`_stale_verdict`):
 | cache younger than T2 | nothing — masked; retried at `(T2−T1)/4` cadence |
 | past T2, `value_policy=none` | **rich None**: `Value(None, ts=now, tags={reason: <code>, last_good, last_good_ts, from_cf})` with `status=True`, delivered once per outage episode; `last_good`/`last_good_ts` are present only when a last good value is known (a startup outage carries `reason` alone) |
 | past T2, `value_policy=raise` | `2003` with the highest failure severity seen |
-| `value_policy=last_good` | nothing, ever — the value ages on |
+| `value_policy=last_good` | nothing from the truth axis — the value ages on; the one exception is a **permanent (CRITICAL) failure**, which surfaces immediately as `2003` for every declared policy (retrying a permanent condition is pointless) |
 
 Notes for maintainers:
 - The stale-None dedup is stateless: the client echoes the None's ts as
