@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 ...
 
+## [2.6.0]
+### Added
+- **Staleness Contract, phase 2**: freezer honors `value_policy` +
+  `time_of_data_max_age` (T2, default `2*tolerance`) — healthy cadence stays
+  on T1, failures masked and retried inside the (T1, T2] repair window, rich
+  `Value(None, tags={reason, last_good, last_good_ts})` past T2 once per
+  episode, counter retired for declared requests; TreeCache treats recovery
+  after a failure episode as a value change. Undeclared requests unchanged.
+  (ocabox-common#8, #40, resolves #28)
+
 ## [2.5.2]
 ### Added
 - `value_policy` reserved in the cyclic-query strip-list (Staleness Contract

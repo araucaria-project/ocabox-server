@@ -67,6 +67,10 @@ class TreeCache(TreeBaseProvider):
         neg_error: Optional[ResponseError] = None  # last ResponseError from the subcontractor
         neg_until: float = 0.0  # time.monotonic() deadline
         fail_count: int = 0
+        # True while the last subcontractor answer for this address was an
+        # error. Independent of the negative-cache flag: it drives the
+        # recovery-as-change semantics below, not failure caching.
+        had_failure: bool = False
 
         def get_change_time(self) -> float:
             return self.change_time
@@ -160,7 +164,15 @@ class TreeCache(TreeBaseProvider):
         kv = self._find_in_known_values(result.address)
         if not kv:
             logger.error(f'Can not find current value among cached known values and should be')
-        await self._update_known_value(result.address, result.value, kv)
+        # Staleness Contract: the first successful refresh after a failure
+        # episode is a *change* even when the payload is equal — during the
+        # outage the value was unknown, so "unknown → v" must wake conditional
+        # subscribers (it also refreshes their timestamp after a 2.6+ freezer
+        # delivered a stale-None).
+        recovered = kv is not None and kv.had_failure and result.status
+        if kv is not None:
+            kv.had_failure = not result.status
+        await self._update_known_value(result.address, result.value, kv, force_change=recovered)
         if self._neg_enabled and kv is not None:
             if result.status:
                 if kv.fail_count:
@@ -207,7 +219,8 @@ class TreeCache(TreeBaseProvider):
             return False
         return not kv.value.is_expired(ts, t_delta)
 
-    async def _update_known_value(self, address: Address, value: Value, known_value: _KnownValue = None):
+    async def _update_known_value(self, address: Address, value: Value, known_value: _KnownValue = None,
+                                  force_change: bool = False):
         """
         This method update known values.
 
@@ -215,6 +228,8 @@ class TreeCache(TreeBaseProvider):
         :param value: Value
         :param known_value: _KnownValue object. It is optional, it can be specified to limit the amount of searching a
             list of known values
+        :param force_change: treat this update as a value change even when the
+            payload is unchanged (recovery after a failure episode)
         :return: None
         """
         # warning value can be None if response got error so check this first
@@ -232,7 +247,7 @@ class TreeCache(TreeBaseProvider):
                 kv.change_time = value.ts
             else:
                 if kv.value.ts < value.ts:
-                    if self._is_changed(new_v=value, old_v=kv.value):
+                    if force_change or self._is_changed(new_v=value, old_v=kv.value):
                         kv.change_time = value.ts
                         await self._report_new_value()  # report that there is new value if conditional_freezer is known
                     kv.value = value
