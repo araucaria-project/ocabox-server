@@ -109,7 +109,13 @@ class TreeConditionalFreezer(TreeBaseProvider):
                 # client library applies — one full missed refresh cycle
                 max_age = 2 * t_tolerance
             elif max_age < t_tolerance:
+                logger.warning(f"time_of_data_max_age ({max_age}) below the effective tolerance "
+                               f"({t_tolerance}) for {request.address} — clamping; the server cannot "
+                               f"guarantee freshness finer than its polling resolution")
                 max_age = t_tolerance
+            # Quick repairs inside the window, floored by the server's polling
+            # resolution (device protection): when the window is narrower than
+            # 4x the floor, fewer repair attempts fit — by design.
             retry_offset = max(self._min_time_of_data_tolerance, (max_age - t_tolerance) / 4)
         else:
             max_age = None
@@ -148,7 +154,11 @@ class TreeConditionalFreezer(TreeBaseProvider):
             # whether k_value is ready to be sent
             if k_value is not None and (
                     time_of_known_change is None or time_of_known_change < k_value.get_change_time()):
-                if value_policy is None or not self._breaks_max_age(k_value, max_age):
+                if (value_policy is None or value_policy == 'last_good'
+                        or not self._breaks_max_age(k_value, max_age)):
+                    # last_good is exempt from the T2 gate by definition: that
+                    # client wants the aging value, however old (a fresh
+                    # last_good subscriber must still receive the cache).
                     returned_value = k_value.get_value().copy()
                     returned_value.tags['from_cf'] = True  # Add a tag to the value that it comes from ConditionalFreezer
                     return returned_value
@@ -204,6 +214,14 @@ class TreeConditionalFreezer(TreeBaseProvider):
             else:
                 logger.info(f'Can not update value in cache: {request.address}')
                 wait_offset_error = retry_offset
+                if value_policy is not None and k_value is not None:
+                    last_ts = k_value.get_timestamp()
+                    if last_ts is not None:
+                        remaining = last_ts + max_age - time.time()
+                        if 0 < remaining <= retry_offset:
+                            # land the final probe just past T2 — the stale
+                            # verdict must be punctual, not late by a retry step
+                            wait_offset_error = remaining + 0.01
                 if err is not None and err.kwargs.get('from_negative_cache'):
                     # Echo of an already-counted failure served from TreeCache's
                     # negative cache — pacing applies, but it is not new device

@@ -177,6 +177,38 @@ class TestOtherPolicies(StalenessContractTestBase):
             self.assertEqual(resp.error.code, 2003)
         self.run_scenario(lambda: scenario())
 
+    def test_last_good_fresh_subscriber_receives_stale_cache(self):
+        """LAST_GOOD is exempt from the T2 gate: a fresh subscriber (e.g. a
+        client that restarted mid-outage) must still receive the aging cached
+        value instead of an endless 4004 loop. (Copilot review of PR #42.)"""
+        async def scenario():
+            first = await self.root.get_response(self.make_request(value_policy='last_good'))
+            self.assertEqual(first.value.v, 42)
+            self.provider.dead = True
+            await asyncio.sleep(self.MAX_AGE + 0.05)  # cache now older than T2
+            fresh = await self.root.get_response(self.make_request(value_policy='last_good'))
+            self.assertTrue(fresh.status)
+            self.assertEqual(fresh.value.v, 42, 'last_good wants the aging value, however old')
+        self.run_scenario(lambda: scenario())
+
+    def test_stale_none_is_punctual(self):
+        """The None must land just past T2 — not late by a retry step (the
+        retry sleep is capped by the remaining time to the truth bound)."""
+        async def scenario():
+            first = await self.root.get_response(self.make_request(value_policy='none',
+                                                                   tolerance=0.1, max_age=0.5))
+            self.provider.dead = True
+            resp = await self.root.get_response(self.make_request(tokc=first.value.ts,
+                                                                  value_policy='none',
+                                                                  tolerance=0.1, max_age=0.5,
+                                                                  timeout=1.5))
+            self.assertIsNone(resp.value.v)
+            age_at_verdict = resp.value.ts - first.value.ts
+            self.assertGreater(age_at_verdict, 0.5, 'None must not be early')
+            self.assertLessEqual(age_at_verdict, 0.59,
+                                 f'None {age_at_verdict:.3f}s after last value — late by more than one capped step')
+        self.run_scenario(lambda: scenario())
+
     def test_last_good_policy_never_delivers_none_nor_error(self):
         async def scenario():
             first = await self.root.get_response(self.make_request(value_policy='last_good'))
