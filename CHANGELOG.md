@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+...
+
+## [2.5.2]
+### Added
+- `value_policy` reserved in the cyclic-query strip-list (Staleness Contract
+  phase 0, #39) — future clients cannot leak it to ASCOM drivers.
 
 ## [2.5.1]
 ### Fixed
