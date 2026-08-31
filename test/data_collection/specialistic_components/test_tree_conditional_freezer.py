@@ -187,7 +187,13 @@ class TestTreeConditionalFreezer(unittest.TestCase):
         self.assertEqual(len(self.tree_cache._known_values), 1)
 
         # IMPORTANT minus 1 because the last query will not fit in the time limit
-        self.assertEqual(self.tree_provider2.nr_requests, time_interval_multiplier - timeout_offset_multiplier - 1)
+        # obsrv#44: the reply margin adapts to the window —
+        # min(configured, max(0.1, 0.2*window)) = min(2i, 1i) = 1 interval
+        # here, so one refresh more fits than under the old fixed margin.
+        effective_offset_multiplier = min(timeout_offset_multiplier,
+                                          max(0.1 / self.time_interval, 0.2 * time_interval_multiplier))
+        self.assertEqual(self.tree_provider2.nr_requests,
+                         time_interval_multiplier - round(effective_offset_multiplier) - 1)
 
     def test_value_change_again(self):
         """Test situation when client know about past changes and value changed again in cache before timeout"""

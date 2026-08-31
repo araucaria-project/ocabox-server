@@ -129,7 +129,17 @@ class TreeConditionalFreezer(TreeBaseProvider):
         # sanity check but probably never happened
         if not isinstance(timeout, float):
             raise TreeOtherError(code=4001, message='Wrong type timeout in request')
-        waiting_timeout = timeout - self._alarm_timeout_offset
+        # Reply margin adapted to the client's window (obsrv#44): the fixed
+        # ``alarm_timeout`` was tuned for long polls — subtracting it whole
+        # from a request window SHORTER than the margin made the window
+        # negative on arrival, so every tight-T2 subscription (e.g. a simple
+        # client on defaults: T1=0.5 → window 1s vs alarm 2s) livelocked into
+        # instant 4004s and never received a single value. The margin exists
+        # to return the renewal BEFORE the client gives up waiting; a fifth
+        # of the window (floored at 100 ms) achieves that at every scale.
+        window = timeout - time.time()
+        alarm_offset = min(self._alarm_timeout_offset, max(0.1, 0.2 * window))
+        waiting_timeout = timeout - alarm_offset
         wait_to = request.request_data.get('no_send_before', 0)
 
         # wait some before doing anything, no send message to fast

@@ -289,3 +289,37 @@ class TestFreshSubscribeHonesty(StalenessContractTestBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class TestTightWindowVsAlarmMargin(StalenessContractTestBase):
+    """obsrv#44: a client window SHORTER than the configured alarm_timeout
+    must still be served — the fixed margin used to make the window negative
+    on arrival, so every tight-T2 request 4004-livelocked without a single
+    delivery (prod: alarm_timeout=2 vs the obcom window cap max(1, T2))."""
+
+    def setUp(self):
+        super().setUp()
+        self.freezer._alarm_timeout_offset = 2.0   # prod-scale margin
+
+    def test_first_value_delivered_despite_window_below_alarm(self):
+        async def scenario():
+            first = await self.root.get_response(
+                self.make_request(value_policy='none', max_age=1.0, timeout=1.0))
+            self.assertTrue(first.status, f'expected a value, got {first.error}')
+            self.assertEqual(first.value.v, 42)
+        self.run_scenario(scenario)
+
+    def test_renewal_waits_for_the_window_instead_of_instant_4004(self):
+        async def scenario():
+            first = await self.root.get_response(
+                self.make_request(value_policy='none', max_age=1.0, timeout=1.0))
+            t0 = time.time()
+            renew = await self.root.get_response(
+                self.make_request(tokc=first.value.ts, value_policy='none',
+                                  max_age=1.0, timeout=1.0))
+            elapsed = time.time() - t0
+            self.assertFalse(renew.status)
+            self.assertEqual(renew.error.code, 4004)
+            self.assertGreaterEqual(
+                elapsed, 0.5, 'renewal must come near the window end, not instantly')
+        self.run_scenario(scenario)
