@@ -1,6 +1,7 @@
 """
 TreeIrisObservatory - Tree adapter for IRIS Observatory.
 """
+import asyncio
 import logging
 import time
 from typing import Optional
@@ -13,7 +14,6 @@ from obcom.data_colection.value_call import ValueRequest
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
 from obsrv.tree_components.specialized_components.tree_conditional_freezer import strip_tree_internal_fields
 from obsrv.telescope_devices.device_tree import Observatory
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -83,15 +83,11 @@ class TreeIrisObservatory(TreeBaseProvider):
             
             # Execute request - the component will use its assigned connector (Pilar, IrisCCD or Alpaca)
             if request_type == 'PUT':
-                result = await wait_for_psce(
-                    component.put(method_name, **request_arguments),
-                    timeout=(request_timeout - time.time()) * self._timeout_multiplier
-                )
+                async with asyncio.timeout((request_timeout - time.time()) * self._timeout_multiplier):
+                    result = await component.put(method_name, **request_arguments)
             else:
-                result = await wait_for_psce(
-                    component.get(method_name, **request_arguments),
-                    timeout=(request_timeout - time.time()) * self._timeout_multiplier
-                )
+                async with asyncio.timeout((request_timeout - time.time()) * self._timeout_multiplier):
+                    result = await component.get(method_name, **request_arguments)
             
             return Value(result, time.time())
             

@@ -3,6 +3,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.7.0]
+### Changed
+- Retired `wait_for_psce` helper: all call sites migrated to `asyncio.timeout`
+  (py ≥ 3.11); `obsrv/utils/asyncio_util_functions.py` deleted; Python floor
+  bumped to `^3.11` (#48)
+
 ## [2.6.2]
 ### Fixed
 - `wait_for_psce`: abandoned inner `wait_for` task's exception is now always

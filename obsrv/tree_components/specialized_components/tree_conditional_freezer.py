@@ -11,7 +11,6 @@ from obsrv.tree_components.specialized_components.tree_cache_observatory_protoco
     KnownValueProtocol
 from obcom.data_colection.value import Value, TreeValueError
 from obcom.data_colection.value_call import ValueRequest
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -204,7 +203,8 @@ class TreeConditionalFreezer(TreeBaseProvider):
             # update value
             try:
                 logger.debug(f"Update value ({request.address})")
-                status_update, err = await wait_for_psce(self._update_value(request), waiting_timeout - time.time())
+                async with asyncio.timeout(waiting_timeout - time.time()):
+                    status_update, err = await self._update_value(request)
             except asyncio.CancelledError:
                 raise
             except asyncio.TimeoutError:
@@ -427,7 +427,8 @@ class TreeConditionalFreezer(TreeBaseProvider):
     @staticmethod
     async def _event_wait(evt: asyncio.Event, timeout):
         try:
-            await wait_for_psce(evt.wait(), timeout)
+            async with asyncio.timeout(timeout):
+                await evt.wait()
             return True
         except asyncio.TimeoutError:
             return False
@@ -436,7 +437,8 @@ class TreeConditionalFreezer(TreeBaseProvider):
     async def _condition_wait(con: asyncio.Condition, timeout):
         try:
             async with con:
-                await wait_for_psce(con.wait(), timeout=timeout)
+                async with asyncio.timeout(timeout):
+                    await con.wait()
             return True
         except asyncio.TimeoutError:
             return False

@@ -9,7 +9,6 @@ from obcom.comunication.comunication_error import CommunicationTimeoutError
 from obcom.comunication.message_serializer import MessageSerializer
 from obcom.comunication.multipart_structure import MultipartStructure
 from obsrv.communication.base_router_with_config import BaseRouterWithConfig
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -149,7 +148,8 @@ class Router(BaseRouterWithConfig):
                                f"({n} since start). Last: {e.message}")
             return
         try:
-            answer = await wait_for_psce(self._solve_request(ms), timeout=time_to_expire)
+            async with asyncio.timeout(time_to_expire):
+                answer = await self._solve_request(ms)
         except ValueError:
             # Obsolete and shouldn't have happened
             # Don't answer for incorrect requests. Close task.

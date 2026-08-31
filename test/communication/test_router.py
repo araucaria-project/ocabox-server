@@ -9,7 +9,6 @@ from obcom.comunication.multipart_structure import MultipartStructure
 from obsrv.ob_config import SingletonConfig
 from obsrv.communication.base_request_solver import BaseRequestSolver
 from obsrv.communication.router import Router
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 from test.communication.sample_test_resolver import SampleTestResolver
 from test.data_collection.sample_test_value_provider import SampleTestValueProvider
 
@@ -152,7 +151,8 @@ class RouterTest(unittest.TestCase):
 
         async def coro2():
             # it should be finished immediately if it's waiting that mean is something wrong
-            await wait_for_psce(stop_task, timeout=1.0)
+            async with asyncio.timeout(1.0):
+                await stop_task
 
         self.loop.run_until_complete(coro2())
         stop_task = vr.get_stop_task()
@@ -285,8 +285,10 @@ class RouterTest(unittest.TestCase):
             vr.start(self.loop)
             try:
                 with self.assertRaises(asyncio.exceptions.TimeoutError):
-                    result = await wait_for_psce(receive(time_to_expire=response_delay/2), timeout=1)
-                result = await wait_for_psce(receive(time_to_expire=response_delay*2), timeout=1)
+                    async with asyncio.timeout(1):
+                        result = await receive(time_to_expire=response_delay/2)
+                async with asyncio.timeout(1):
+                    result = await receive(time_to_expire=response_delay*2)
                 self.assertIsNotNone(result)
             finally:
                 vr.stop()

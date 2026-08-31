@@ -13,7 +13,6 @@ from obcom.data_colection.coded_error import TreeOtherError
 from obsrv.data_collection.resource_manager.resource_manager import TelescopeComponentManagerAlpaca
 from obcom.data_colection.value import Value, TreeValueError
 from obcom.data_colection.value_call import ValueRequest
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 from aiohttp.client_exceptions import ClientConnectionError, ServerConnectionError
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
@@ -103,8 +102,8 @@ class TreeAlpacaObservatory(TreeBaseProvider):
             raise AddressError(address=address, code=1002, message="Can not call this alpaca method in driver")
 
         try:
-            result = await wait_for_psce(method(alpaca_method_name, **request_arguments),
-                                         timeout=(request_timeout-time.time())*self._timeout_multiplier)
+            async with asyncio.timeout((request_timeout-time.time())*self._timeout_multiplier):
+                result = await method(alpaca_method_name, **request_arguments)
         except asyncio.CancelledError:
             raise
         except AlpacaHttp400Error as e:

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import param
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 from typing import Optional
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
@@ -52,7 +51,8 @@ class OcaboxTask(param.Parameterized):
                 # close task because method is corrupted
                 self.stop_running_event.set()
             try:
-                await wait_for_psce(self.stop_running_event.wait(), timeout=self.time_tick_s)
+                async with asyncio.timeout(self.time_tick_s):
+                    await self.stop_running_event.wait()
             except asyncio.TimeoutError:
                 pass
         logger.info(f'Task finished {self}')

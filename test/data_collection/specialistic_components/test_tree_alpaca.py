@@ -8,7 +8,6 @@ from obcom.data_colection.address import Address
 from obsrv.tree_components.specialized_components.tree_alpaca import TreeAlpacaObservatory
 from obcom.data_colection.value_call import ValueRequest
 from obsrv.ob_config import SingletonConfig
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
@@ -101,7 +100,8 @@ class TreeAlpacaTest(unittest.IsolatedAsyncioTestCase):
         address = Address('.'.join([component, sample_alpaca_call]))
         request = ValueRequest(address, time.time(), request_timeout=timeout)
         try:
-            response = await wait_for_psce(tao.get_response(request), timeout=timeout+2)
+            async with asyncio.timeout(timeout+2):
+                response = await tao.get_response(request)
         except asyncio.TimeoutError:
             # if this error was raise that mean alpaca module is not working correctly
             raise RuntimeError
