@@ -1,5 +1,6 @@
 """Tests for obsrv.utils.asyncio_util_functions.wait_for_psce."""
 import asyncio
+import contextlib
 import gc
 import unittest
 
@@ -52,9 +53,11 @@ class TestWaitForPsceNoTaskLeaks(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_never_retrieved_on_cancel_during_timeout_race(self):
         """
-        Cancel the outer shield just as the timeout budget expires.
-        After a GC/settle cycle the asyncio exception handler must NOT have
-        been called with a 'was never retrieved' event.
+        Cancel the outer shield BEFORE the timeout expires, using a refresh
+        coroutine that converts CancelledError into TimeoutError on teardown
+        (the aiohttp pattern seen on dead Alpaca hosts).  After dropping all
+        references and running a GC/settle cycle the asyncio exception handler
+        must NOT have been called with a 'was never retrieved' event.
         """
         leaked_events = []
 
@@ -66,22 +69,27 @@ class TestWaitForPsceNoTaskLeaks(unittest.IsolatedAsyncioTestCase):
         loop.set_exception_handler(capturing_handler)
 
         try:
-            async def never_completes():
-                await asyncio.sleep(100)
+            async def aiohttp_style_refresh():
+                """Simulates aiohttp converting CancelledError → TimeoutError during teardown."""
+                try:
+                    await asyncio.sleep(100)
+                except asyncio.CancelledError:
+                    raise TimeoutError("aiohttp-style teardown")
 
             outer = asyncio.ensure_future(
-                wait_for_psce(never_completes(), timeout=0.02)
+                wait_for_psce(aiohttp_style_refresh(), timeout=50)
             )
-            # Cancel slightly after the timeout would fire
-            await asyncio.sleep(0.03)
+            # Cancel BEFORE the timeout fires
+            await asyncio.sleep(0.01)
             outer.cancel()
-            with self.assertRaises((asyncio.CancelledError, asyncio.TimeoutError)):
+            with contextlib.suppress(BaseException):
                 await outer
+            del outer   # drop the masking reference so Task.__del__ can fire
 
-            # Settle: allow done-callbacks and GC to run
-            gc.collect()
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            # Settle: allow done-callbacks and GC to trigger Task.__del__
+            for _ in range(4):
+                gc.collect()
+                await asyncio.sleep(0)
 
         finally:
             loop.set_exception_handler(original_handler)

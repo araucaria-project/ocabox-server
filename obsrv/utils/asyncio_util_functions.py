@@ -12,7 +12,7 @@ def _retrieve_silently(t: asyncio.Task) -> None:
         return
     exc = t.exception()
     if exc is not None:
-        logger.debug("wait_for_psce: inner wait_for task finished with %r (suppressed)", exc)
+        logger.debug("wait_for_psce: inner wait_for task finished with %r", exc)
 
 
 async def wait_for_psce(fut, timeout):
@@ -29,12 +29,12 @@ async def wait_for_psce(fut, timeout):
     """
     task = asyncio.ensure_future(fut)
     inner = asyncio.ensure_future(asyncio.wait_for(task, timeout=timeout))
+    inner.add_done_callback(_retrieve_silently)
     try:
         return await asyncio.shield(inner)
     except asyncio.CancelledError:
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
-        inner.add_done_callback(_retrieve_silently)
         raise
 
