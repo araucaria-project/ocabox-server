@@ -1,5 +1,18 @@
 import asyncio
+import logging
 from contextlib import suppress
+
+logger = logging.getLogger(__name__)
+
+
+def _retrieve_silently(t: asyncio.Task) -> None:
+    """Done-callback that silently retrieves a task's exception so asyncio does
+    not emit 'Task exception was never retrieved' noise in the journal."""
+    if t.cancelled():
+        return
+    exc = t.exception()
+    if exc is not None:
+        logger.debug("wait_for_psce: inner wait_for task finished with %r", exc)
 
 
 async def wait_for_psce(fut, timeout):
@@ -15,8 +28,10 @@ async def wait_for_psce(fut, timeout):
     :param timeout: timeout, czn be float or int number
     """
     task = asyncio.ensure_future(fut)
+    inner = asyncio.ensure_future(asyncio.wait_for(task, timeout=timeout))
+    inner.add_done_callback(_retrieve_silently)
     try:
-        return await asyncio.shield(asyncio.wait_for(task, timeout=timeout))
+        return await asyncio.shield(inner)
     except asyncio.CancelledError:
         task.cancel()
         with suppress(asyncio.CancelledError):
