@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [2.6.1]
+### Fixed
+- Freezer: reply margin (`alarm_timeout`) adapts to the client's request
+  window — `min(configured, max(0.1, 0.2*window))`; windows shorter than the
+  fixed margin no longer 4004-livelock (tight-T2 clients get served) (#44)
 ...
 
 ## [2.6.0]
