@@ -63,11 +63,6 @@ class BaseRequestSolver(ABC):
         :return:
         """
         await self._tree_data.nats_messenger.open(host=self._nats_host, port=self._nats_port, wait=10)
-        # try:
-        #     await wait_for_psce(self._tree_data.nats_messenger.open(host=self._nats_host, port=self._nats_port), 10)
-        # except asyncio.TimeoutError:
-        #     logger.error(f"Can not connect to server NATS")
-        #     raise RuntimeError("Can not connect to server NATS")
         await self.data_provider.run()
         await self._nats_update_config_observatories()
 

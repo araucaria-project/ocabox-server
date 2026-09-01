@@ -18,7 +18,6 @@ from obsrv.tree_components.specialized_components.tree_base_request_blocker impo
 from obsrv.tree_components.specialized_components.tree_blocker_access_grantor import TreeBlockerAccessGrantor
 from obsrv.tree_components.specialized_components.tree_plan_executor import TreePlanExecutor
 from obsrv.ob_config import SingletonConfig
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 from test.data_collection.sample_test_value_provider import SampleTestValueProvider
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
@@ -115,15 +114,19 @@ class RequestSolverTest(unittest.IsolatedAsyncioTestCase):
 
         self.RS._nats_port = 7452  # set wrong port
         with self.assertRaises(asyncio.TimeoutError):
-            await wait_for_psce(self.RS.run_tree(), 1.5)
+            async with asyncio.timeout(1.5):
+                await self.RS.run_tree()
         self.assertEqual(self.RS._tree_data.nats_messenger.conn.status.get("nats_server"), StatusEnum.fail)
-        await wait_for_psce(self.RS.stop_tree(), 1.5)
+        async with asyncio.timeout(1.5):
+            await self.RS.stop_tree()
 
     async def test_connect_to_nats(self):
         """test connect to nats"""
-        await wait_for_psce(self.RS.run_tree(), 1.5)
+        async with asyncio.timeout(1.5):
+            await self.RS.run_tree()
         self.assertEqual(self.RS._tree_data.nats_messenger.conn.status.get("nats_server"), StatusEnum.ok)
-        await wait_for_psce(self.RS.stop_tree(), 1.5)
+        async with asyncio.timeout(1.5):
+            await self.RS.stop_tree()
 
     async def test_update_nats_witch_config_alpaca(self):
         """test update nats witch alpaca configuration"""
@@ -132,13 +135,15 @@ class RequestSolverTest(unittest.IsolatedAsyncioTestCase):
         broker = TreeBaseBrokerDefaultTarget(component_name="broker", list_providers=[], default_provider=tao)
         self.RS.data_provider = broker
 
-        await wait_for_psce(self.RS.run_tree(), 1.5)
+        async with asyncio.timeout(1.5):
+            await self.RS.run_tree()
         self.assertEqual(self.RS._tree_data.nats_messenger.conn.status.get("nats_server"), StatusEnum.ok)
         await asyncio.sleep(1)
 
         reader = get_reader(NatsStreams.ALPACA_CONFIG, deliver_policy="last")
         cfg = await reader.read_next()
-        await wait_for_psce(self.RS.stop_tree(), 1.5)  # here close connection to nats
+        async with asyncio.timeout(1.5):
+            await self.RS.stop_tree()  # here close connection to nats
 
         configuration = SingletonConfig.get_config()
         time_save_read__dif = dt_ensure_datetime(dt_utcnow_array()) - dt_ensure_datetime(tuple(cfg[0].get("published", [])))

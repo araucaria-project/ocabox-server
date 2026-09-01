@@ -1,21 +1,27 @@
-"""Tests for obsrv.utils.asyncio_util_functions.wait_for_psce."""
+"""Cancellation-semantics tests for the asyncio.timeout pattern.
+
+These tests replace the former wait_for_psce tests after the migration to
+``asyncio.timeout`` (py ≥ 3.11).  The middle-task leak that test_wait_for_psce
+previously guarded against no longer exists — there is no middle task.  A
+regression test is kept that asserts no ``Task exception was never retrieved``
+events fire when a cancelled awaitable raises from its teardown.
+"""
 import asyncio
 import contextlib
 import gc
 import unittest
 
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 
-
-class TestWaitForPsceSemantics(unittest.IsolatedAsyncioTestCase):
-    """Normal (non-cancel) semantics must be unchanged."""
+class TestAsyncioTimeoutSemantics(unittest.IsolatedAsyncioTestCase):
+    """Normal (non-cancel) semantics of the asyncio.timeout pattern."""
 
     async def test_result_delivery(self):
         """Returns the coroutine's result when it completes within the timeout."""
         async def coro():
             return 42
 
-        result = await wait_for_psce(coro(), timeout=1.0)
+        async with asyncio.timeout(1.0):
+            result = await coro()
         self.assertEqual(result, 42)
 
     async def test_timeout_propagates(self):
@@ -24,10 +30,11 @@ class TestWaitForPsceSemantics(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(10)
 
         with self.assertRaises(asyncio.TimeoutError):
-            await wait_for_psce(slow(), timeout=0.01)
+            async with asyncio.timeout(0.01):
+                await slow()
 
     async def test_inner_task_cancelled_on_cancellation(self):
-        """When the outer await is cancelled, the inner task must be cancelled too."""
+        """When the outer await is cancelled, the inner coroutine must be cancelled too."""
         inner_started = asyncio.Event()
         inner_cancelled = asyncio.Event()
 
@@ -39,25 +46,31 @@ class TestWaitForPsceSemantics(unittest.IsolatedAsyncioTestCase):
                 inner_cancelled.set()
                 raise
 
-        outer = asyncio.ensure_future(wait_for_psce(long_running(), timeout=5.0))
+        async def wrapper():
+            async with asyncio.timeout(5.0):
+                await long_running()
+
+        outer = asyncio.ensure_future(wrapper())
         await inner_started.wait()
         outer.cancel()
         with self.assertRaises(asyncio.CancelledError):
             await outer
         await asyncio.sleep(0)   # let callbacks run
-        self.assertTrue(inner_cancelled.is_set(), "inner task should have been cancelled")
+        self.assertTrue(inner_cancelled.is_set(), "inner coroutine should have been cancelled")
 
 
-class TestWaitForPsceNoTaskLeaks(unittest.IsolatedAsyncioTestCase):
-    """The cancel-while-timeout race must not produce 'exception never retrieved' noise."""
+class TestNoTaskLeaksOnCancelDuringTimeout(unittest.IsolatedAsyncioTestCase):
+    """Regression: no 'Task exception was never retrieved' noise with asyncio.timeout."""
 
     async def test_no_never_retrieved_on_cancel_during_timeout_race(self):
         """
-        Cancel the outer shield BEFORE the timeout expires, using a refresh
-        coroutine that converts CancelledError into TimeoutError on teardown
-        (the aiohttp pattern seen on dead Alpaca hosts).  After dropping all
-        references and running a GC/settle cycle the asyncio exception handler
-        must NOT have been called with a 'was never retrieved' event.
+        Cancel an asyncio.timeout-wrapped coroutine whose teardown converts
+        CancelledError into TimeoutError (the aiohttp pattern seen on dead Alpaca
+        hosts).  After dropping all references and running a GC/settle cycle the
+        asyncio exception handler must NOT have been called with a
+        'was never retrieved' event.
+
+        With asyncio.timeout there is no middle task, so nothing can be orphaned.
         """
         leaked_events = []
 
@@ -76,9 +89,11 @@ class TestWaitForPsceNoTaskLeaks(unittest.IsolatedAsyncioTestCase):
                 except asyncio.CancelledError:
                     raise TimeoutError("aiohttp-style teardown")
 
-            outer = asyncio.ensure_future(
-                wait_for_psce(aiohttp_style_refresh(), timeout=50)
-            )
+            async def wrapper():
+                async with asyncio.timeout(50):
+                    await aiohttp_style_refresh()
+
+            outer = asyncio.ensure_future(wrapper())
             # Cancel BEFORE the timeout fires
             await asyncio.sleep(0.01)
             outer.cancel()

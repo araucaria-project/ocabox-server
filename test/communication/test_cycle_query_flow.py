@@ -13,7 +13,6 @@ from obsrv.tree_components.specialized_components import TreeCache
 from obsrv.tree_components.specialized_components import TreeConditionalFreezer
 from obcom.data_colection.value import Value
 from obcom.data_colection.value_call import ValueRequest, ValueResponse
-from obsrv.utils.asyncio_util_functions import wait_for_psce
 from test.data_collection.sample_test_value_provider import SampleTestValueProvider
 
 logger = logging.getLogger(__name__.rsplit('.')[-1])
@@ -263,7 +262,8 @@ class TestConditionalCycleQueryFlow(unittest.TestCase):
         async def coro():
             # if there is a TimeoutError here, it means that the freezer is blocked indefinitely because parameters
             # are not sent back to it
-            await wait_for_psce(time_coro(), 2)
+            async with asyncio.timeout(2):
+                await time_coro()
 
         self.loop.run_until_complete(coro())
 
@@ -295,7 +295,8 @@ class TestConditionalCycleQueryFlow(unittest.TestCase):
                 result = await cq.get_response()
                 request.request_data['raise_value_error_temporary'] = True
                 with self.assertRaises(asyncio.TimeoutError):
-                    result = await wait_for_psce(time_coro(cq), 0.5)
+                    async with asyncio.timeout(0.5):
+                        result = await time_coro(cq)
                 await asyncio.sleep(0.1)  # wait to make sure cycle query doesn't close
                 self.assertFalse(cq.is_stopped())
             finally:
@@ -339,7 +340,8 @@ class TestConditionalCycleQueryFlow(unittest.TestCase):
         async def coro():
             # if there is a TimeoutError here, it means that the freezer is blocked indefinitely because parameters
             # are not sent back to it
-            await wait_for_psce(time_coro(), 2)
+            async with asyncio.timeout(2):
+                await time_coro()
 
         self.loop.run_until_complete(coro())
         self.assertEqual(1, checker.get('a'))
