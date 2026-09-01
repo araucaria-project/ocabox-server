@@ -204,6 +204,9 @@ class TreeConditionalFreezer(TreeBaseProvider):
             try:
                 logger.debug(f"Update value ({request.address})")
                 async with asyncio.timeout(waiting_timeout - time.time()):
+                    await asyncio.sleep(0)  # scheduling point: let concurrent clients park on the
+                                            # wake-up condition before the refresh can complete
+                                            # (was implicit in wait_for_psce's task-wrapping)
                     status_update, err = await self._update_value(request)
             except asyncio.CancelledError:
                 raise
