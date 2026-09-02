@@ -2,7 +2,7 @@ settings:
   packet_size: 1024
   command_timeout: 5.0
   nats_url: "nats://127.0.0.1:4222"
-  nats_subject: "svc.rpc.irsi" # Global topic
+  nats_subject: "svc.rpc.iris" # Global topic
 
 mappings:
   commands:
