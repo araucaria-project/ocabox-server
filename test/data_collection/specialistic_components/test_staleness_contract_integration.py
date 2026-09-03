@@ -21,6 +21,21 @@ from obsrv.tree_components.specialized_components import TreeCache, TreeConditio
 from test.data_collection.specialistic_components.test_staleness_contract import SwitchableProvider
 
 
+# Sub-second tolerances throughout; the production floor of the default T2
+# would stretch every scenario to seconds.
+_FLOOR = None
+
+
+def setUpModule():
+    global _FLOOR
+    _FLOOR = ValueRequest.DEFAULT_MAX_AGE_FLOOR
+    ValueRequest.DEFAULT_MAX_AGE_FLOOR = 0.0
+
+
+def tearDownModule():
+    ValueRequest.DEFAULT_MAX_AGE_FLOOR = _FLOOR
+
+
 class DirectTreeSolver:
     """Client-request solver that talks straight to the tree (no ZMQ)."""
 
