@@ -40,9 +40,24 @@ class SwitchableProvider(TreeProvider):
         return Value(self.payload, time.time())
 
 
+# Sub-second tolerances throughout; the production floor of the default T2
+# would stretch every scenario to seconds.
+_FLOOR = None
+
+
+def setUpModule():
+    global _FLOOR
+    _FLOOR = ValueRequest.DEFAULT_MAX_AGE_FLOOR
+    ValueRequest.DEFAULT_MAX_AGE_FLOOR = 0.0
+
+
+def tearDownModule():
+    ValueRequest.DEFAULT_MAX_AGE_FLOOR = _FLOOR
+
+
 class StalenessContractTestBase(unittest.TestCase):
     TOLERANCE = 0.15          # T1 — healthy refresh cadence
-    MAX_AGE = 2 * TOLERANCE   # T2 — default truth bound (2*T1)
+    MAX_AGE = 2 * TOLERANCE   # T2 — default truth bound with the floor zeroed
 
     def setUp(self):
         super().setUp()
@@ -74,6 +89,32 @@ class StalenessContractTestBase(unittest.TestCase):
             finally:
                 await self.root.stop()
         return asyncio.run(wrapped())
+
+
+class TestDefaultMaxAgeRule(StalenessContractTestBase):
+    """An undeclared T2 follows ``ValueRequest.default_max_age`` — including its
+    floor — so a dead source is masked well past 2*T1."""
+
+    def setUp(self):
+        super().setUp()
+        self._patched = ValueRequest.DEFAULT_MAX_AGE_FLOOR
+        ValueRequest.DEFAULT_MAX_AGE_FLOOR = _FLOOR
+
+    def tearDown(self):
+        ValueRequest.DEFAULT_MAX_AGE_FLOOR = self._patched
+        super().tearDown()
+
+    def test_undeclared_max_age_is_floored(self):
+        async def scenario():
+            first = await self.root.get_response(self.make_request(value_policy='none'))
+            self.assertEqual(first.value.v, 42)
+            self.provider.dead = True
+            await asyncio.sleep(2 * self.TOLERANCE + 0.05)  # past 2*T1, inside the floor
+            renew = await self.root.get_response(
+                self.make_request(value_policy='none', tokc=first.value.ts, timeout=0.6))
+            self.assertFalse(renew.status, f'stale-None inside the floored bound: {renew}')
+            self.assertEqual(renew.error.code, 4004)
+        self.run_scenario(lambda: scenario())
 
 
 class TestStaleNoneDelivery(StalenessContractTestBase):

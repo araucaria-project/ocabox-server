@@ -3,6 +3,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.7.1]
+### Changed
+- Freezer: the default T2 for a declaring request without `time_of_data_max_age`
+  comes from the shared `ValueRequest.default_max_age` rule (2*T1 floored at
+  5 s; requires ocabox-common >= 1.4.0). Explicit T2 unchanged
+
 ## [2.7.0]
 ### Changed
 - Retired `wait_for_psce` helper: all call sites migrated to `asyncio.timeout`

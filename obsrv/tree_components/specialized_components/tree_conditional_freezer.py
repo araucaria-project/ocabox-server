@@ -104,9 +104,9 @@ class TreeConditionalFreezer(TreeBaseProvider):
         max_age = request.time_of_data_max_age
         if value_policy is not None:
             if max_age is None:
-                # old/new client mix or hand-built request: same default the
-                # client library applies — one full missed refresh cycle
-                max_age = 2 * t_tolerance
+                # old/new client mix or hand-built request: the same rule the
+                # client library applies
+                max_age = ValueRequest.default_max_age(t_tolerance)
             elif max_age < t_tolerance:
                 logger.warning(f"time_of_data_max_age ({max_age}) below the effective tolerance "
                                f"({t_tolerance}) for {request.address} — clamping; the server cannot "
