@@ -3,6 +3,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.7.2]
+### Changed
+- ocabox-common pinned to the 1.4.0 release (git tag/rev) and checked at import time.
+
 ## [2.7.1]
 ### Changed
 - Freezer: the default T2 for a declaring request without `time_of_data_max_age`

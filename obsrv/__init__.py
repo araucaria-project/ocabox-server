@@ -1,0 +1,3 @@
+from obsrv.dependency_guard import check_dependency_versions
+
+check_dependency_versions()
