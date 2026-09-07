@@ -87,15 +87,15 @@ class BaseRequestSolver(ABC):
             if isinstance(r, ValueResponse):
                 response.append(r)
             elif isinstance(r, BaseException):
-                logger.error(f"CRITICAL One of the sub-tasks raise some unresolved exception - {type(r)}: {r}.")
+                logger.error(f"One of the sub-tasks raise some unresolved exception - {type(r)}: {r}.")
                 re = ResponseError(4001, 'There were unexpected problems trying to respond to the request', repr(self),
-                                   ResponseError.SEVERITY_CRITICAL)
+                                   ResponseError.SEVERITY_NORMAL)
                 v_response = ValueResponse('', None, False, re)
                 response.append(v_response)
             else:
-                logger.error(f"CRITICAL One of the sub-tasks return not supported type response - {type(r)}: {r}.")
+                logger.error(f"One of the sub-tasks return not supported type response - {type(r)}: {r}.")
                 re = ResponseError(4001, 'There were unexpected problems trying to respond to the request', repr(self),
-                                   ResponseError.SEVERITY_CRITICAL)
+                                   ResponseError.SEVERITY_NORMAL)
                 v_response = ValueResponse('', None, False, re)
                 response.append(v_response)
         return response
@@ -114,7 +114,7 @@ class BaseRequestSolver(ABC):
         # Can not find value provider application
         if not self.data_provider or not isinstance(self.data_provider, ProvidesResponseProtocol):
             logger.error('Can not find value provider application.')
-            re = ResponseError(4002, '', repr(self), ResponseError.SEVERITY_CRITICAL)
+            re = ResponseError(4002, '', repr(self), ResponseError.SEVERITY_NORMAL)
             v_response = ValueResponse(v_request.address, None, False, re)
             return v_response
         # try to get response
@@ -125,7 +125,7 @@ class BaseRequestSolver(ABC):
             raise
         except Exception as e:
             logger.error(f'{str(e)}')
-            re = ResponseError(4002, '', repr(self), ResponseError.SEVERITY_CRITICAL)
+            re = ResponseError(4002, '', repr(self), ResponseError.SEVERITY_NORMAL)
             v_response = ValueResponse(v_request.address, None, False, re)
         return v_response
 

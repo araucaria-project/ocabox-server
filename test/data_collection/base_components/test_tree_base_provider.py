@@ -2,6 +2,7 @@ import asyncio
 import unittest
 from obcom.data_colection.address import AddressError
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
+from obcom.data_colection.response_error import ResponseError
 from obcom.data_colection.value import Value, TreeValueError
 from obcom.data_colection.value_call import ValueRequest, ValueResponse
 from test.data_collection.sample_test_value_provider import SampleTestValueProvider
@@ -153,6 +154,8 @@ class TreeBaseProviderTest(unittest.TestCase):
         self.assertFalse(response.status)
         self.assertIsNone(response.value)
         self.assertEqual(response.error.code, 3003)
+        self.assertEqual(response.error.severity, ResponseError.SEVERITY_NORMAL)
+        self.assertIn('RuntimeError', response.error.message)
         self.assertTrue(_TrackingProvider.on_subcontractor_return_called,
                         "_on_subcontractor_return must be called even when subcontractor raises an exception")
 

@@ -45,6 +45,14 @@ def strip_tree_internal_fields(request_arguments: dict) -> dict:
     return {k: v for k, v in request_arguments.items() if k not in TREE_INTERNAL_REQUEST_FIELDS}
 
 
+def _capped_at_normal(severity: Optional[str]) -> str:
+    """An episode's aggregated severity never exceeds NORMAL: one CRITICAL blip inside an
+    otherwise transient outage is not proof that the address can never succeed."""
+    if severity is None or ResponseError.compare_severity(severity, ResponseError.SEVERITY_NORMAL):
+        return ResponseError.SEVERITY_NORMAL
+    return severity
+
+
 # todo zapytać  o podwojne zapytania do rutera, jedna wartość może się zmienić szybciej nisz druga i co wtedy?
 #  Zdajemy się na inteligęcje urzytkownika? może niech będzie taka opcja ale w client_API się to uniemożliwi?
 
@@ -180,12 +188,8 @@ class TreeConditionalFreezer(TreeBaseProvider):
             # by the tolerance clock in _stale_verdict instead)
             if value_policy is None and nr_of_unsuccessful_refreshes >= self._max_unsuccessful_refreshes:
                 logger.info(f'Too many failed attempts to refresh a value {request.address}')
-                # ``severity=None`` resolves to ``SEVERITY_NORMAL`` via the ResponseError
-                # constructor — used when no underlying connector error supplied a
-                # severity (e.g. a connector that swallowed the exception and returned
-                # None). Connectors MUST surface real errors with explicit severity so
-                # this fallback is reached only for legitimate "no signal at all" cases.
-                raise TreeValueError(code=2003, severity=highest_update_error_severity)
+                # None (connector swallowed the error) resolves to NORMAL.
+                raise TreeValueError(code=2003, severity=_capped_at_normal(highest_update_error_severity))
 
             await asyncio.sleep(0)  # let other tasks do work
             # waiting logic
@@ -305,7 +309,7 @@ class TreeConditionalFreezer(TreeBaseProvider):
             raise TreeValueError(code=2003,
                                  message=f'Value stale beyond client max age ({max_age}s); '
                                          f'last failure code {err.code if err else "?"}',
-                                 severity=highest_severity)
+                                 severity=_capped_at_normal(highest_severity))
         # value_policy == 'none'
         if time_of_known_change is not None:
             if last_ts is not None and time_of_known_change > last_ts:
