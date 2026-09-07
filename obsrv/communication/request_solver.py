@@ -29,16 +29,16 @@ class RequestSolver(BaseRequestSolver):
             elif isinstance(r, BaseException):
                 # This is a precaution against unexpected program failures. To run properly, all errors should be
                 # caught in '_get_single_answer' method.
-                logger.error(f"CRITICAL One of the sub-tasks raise some unresolved exception - {type(r)}: {r}.")
+                logger.error(f"One of the sub-tasks raise some unresolved exception - {type(r)}: {r}.")
                 re = ResponseError(4001, 'There were unexpected problems trying to respond to the request', repr(self),
-                                   ResponseError.SEVERITY_CRITICAL)
+                                   ResponseError.SEVERITY_NORMAL)
                 v_response = ValueResponse('', None, False, re)
                 resp = v_response.to_byte()
                 response.append(resp)
             else:
-                logger.error(f"CRITICAL One of the sub-tasks return not supported type response - {type(r)}: {r}.")
+                logger.error(f"One of the sub-tasks return not supported type response - {type(r)}: {r}.")
                 re = ResponseError(4001, 'There were unexpected problems trying to respond to the request', repr(self),
-                                   ResponseError.SEVERITY_CRITICAL)
+                                   ResponseError.SEVERITY_NORMAL)
                 v_response = ValueResponse('', None, False, re)
                 resp = v_response.to_byte()
                 response.append(resp)

@@ -47,6 +47,8 @@ Severity carries client behaviour. As of 2026-05-03 (post `ErrorPolicy.SERVICE` 
 
 Pick the axis answer to: *"if a daemon retried this in 30 seconds, would it succeed?"*
 
+CRITICAL may be assigned only to a cause that cannot change without a configuration or code change (unknown address, unimplemented method, deny-listed address, malformed request bookkeeping). A catch-all — any `except Exception` that did not identify the cause — is always NORMAL, and an aggregated episode severity (counter path, T2 verdict) never exceeds NORMAL.
+
 - **Yes, plausibly** → `TEMPORARY` (retry handled inside the cycle-query layer; client never notified) or `NORMAL` (client retries with backoff).
 - **No, never under the current configuration** → `CRITICAL`.
 
@@ -57,6 +59,9 @@ Examples:
 | Single missed poll inside a connector's self-heal window             | `TEMPORARY`  | Connector self-heals; cycle-query retries silently within one cycle.      |
 | TCP `ECONNREFUSED` against an instrument (Pilar/IRIS-CCD)            | `NORMAL`     | Sustained device-offline state; SERVICE preset retries with throttled logging until the device returns. |
 | ALPACA driver returns `0x40C NotImplemented`                         | `NORMAL`     | External, may change if hardware/driver is reconfigured. (Legacy choice.) |
+| Subcontractor catch-all (`3003`)                                     | `NORMAL`     | Cause unknown, permanence unproven.                                       |
+| Solver sub-task failed / provider did not answer (`4001/4002`)       | `NORMAL`     | Transport; retry with backoff.                                            |
+| Counter / T2 verdict (`2003`)                                        | `≤ NORMAL`   | Inherits the episode's severity capped at NORMAL.                         |
 | Method missing from Pilar/IRIS-CCD command map (`KeyError` path)     | `CRITICAL`   | Address-space mismatch — won't change without a server reconfig.          |
 | `no_cachable_regex` excludes the address (`TreeOtherError(4003)`)    | `CRITICAL`   | Configuration, not state — the same address will always be rejected.      |
 | Component address doesn't exist in the tree (`AddressError(1002)`)   | `CRITICAL`   | Address space is fixed by component schema.                               |
@@ -105,6 +110,7 @@ Codes live in `obcom.data_colection.coded_error`. Numeric ranges signal the erro
 |------|--------------------------------------------------|------------------|--------------------------------------------------------------|
 | 3001 | Wrong tree architecture / unexpected leaf        | `CRITICAL`       | TIC misconfiguration.                                        |
 | 3002 | Component has not implemented the requested method | `CRITICAL`     | Permanent — instrument doesn't expose this endpoint.         |
+| 3003 | Subcontractor raised an unidentified exception   | `NORMAL`         | Catch-all wrapper; permanence unproven.                      |
 
 ### 4xxx — Other / transport errors (`TreeOtherError`)
 

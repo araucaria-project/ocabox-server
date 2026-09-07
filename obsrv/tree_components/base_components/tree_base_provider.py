@@ -88,8 +88,9 @@ class TreeBaseProvider(TreeComponent, ABC):
                     result = ValueResponse(request.address, None, False, re)
                     return result
                 except Exception as e:
-                    re = ResponseError(3003, f'Subcontractor error: {e}', repr(self),
-                                       ResponseError.SEVERITY_CRITICAL)
+                    # a catch-all cannot claim permanence; connectors raise typed errors with their own severity
+                    re = ResponseError(3003, f'Subcontractor error: {type(e).__name__}: {e}', repr(self),
+                                       ResponseError.SEVERITY_NORMAL)
                     logger.error(f"Subcontractor {self._subcontractor} raised {type(e).__name__}: {e}")
                     result = ValueResponse(request.address, None, False, re)
                     return result

@@ -13,7 +13,7 @@ import unittest
 from obcom.data_colection.address import Address
 from obcom.data_colection.coded_error import TreeOtherError
 from obcom.data_colection.response_error import ResponseError
-from obcom.data_colection.value import Value
+from obcom.data_colection.value import Value, TreeValueError
 from obcom.data_colection.value_call import ValueRequest
 from obsrv.tree_components.base_components.tree_provider import TreeProvider
 from obsrv.tree_components.specialized_components import TreeCache, TreeConditionalFreezer
@@ -27,6 +27,7 @@ class SwitchableProvider(TreeProvider):
         self.dead = False
         self.fail_times = 0  # fail exactly N next calls (transient blip), then heal
         self.severity = ResponseError.SEVERITY_NORMAL
+        self.fail_severity = None
         self.payload = 42
         self.calls = 0
 
@@ -34,7 +35,8 @@ class SwitchableProvider(TreeProvider):
         self.calls += 1
         if self.fail_times > 0:
             self.fail_times -= 1
-            raise TreeOtherError(code=4005, message='transient blip', severity=self.severity)
+            sev = self.fail_severity if self.fail_severity is not None else self.severity
+            raise TreeOtherError(code=4005, message='transient blip', severity=sev)
         if self.dead:
             raise TreeOtherError(code=4005, message='device down', severity=self.severity)
         return Value(self.payload, time.time())
@@ -328,8 +330,39 @@ class TestFreshSubscribeHonesty(StalenessContractTestBase):
         self.run_scenario(lambda: scenario())
 
 
-if __name__ == '__main__':
-    unittest.main()
+class TestEpisodeSeverityCapping(StalenessContractTestBase):
+    """An episode's aggregated severity is capped at NORMAL (counter path, T2 verdict)."""
+
+    def test_counter_path_2003_capped_at_normal(self):
+        """Undeclared request, dead=True, severity=SEVERITY_CRITICAL, small max_unsuccessful_refreshes
+        -> the 2003 has severity == SEVERITY_NORMAL."""
+        async def scenario():
+            first = await self.root.get_response(self.make_request())
+            self.provider.dead = True
+            self.provider.severity = ResponseError.SEVERITY_CRITICAL
+            await asyncio.sleep(self.TOLERANCE + 0.05)
+            resp = await self.root.get_response(self.make_request(tokc=first.value.ts))
+            self.assertFalse(resp.status)
+            self.assertEqual(resp.error.code, 2003)
+            self.assertEqual(resp.error.severity, ResponseError.SEVERITY_NORMAL)
+        self.run_scenario(lambda: scenario())
+
+    def test_declared_raise_past_t2_2003_capped_at_normal(self):
+        """value_policy='raise', provider NORMAL with one CRITICAL blip in history
+        -> 2003 capped at NORMAL."""
+        req = self.make_request(value_policy='raise')
+        with self.assertRaises(TreeValueError) as ctx:
+            self.freezer._stale_verdict(
+                request=req,
+                k_value=None,
+                max_age=0.1,
+                value_policy='raise',
+                err=TreeOtherError(code=4005, message='normal error', severity=ResponseError.SEVERITY_NORMAL),
+                time_of_known_change=None,
+                highest_severity=ResponseError.SEVERITY_CRITICAL,
+            )
+        self.assertEqual(ctx.exception.code, 2003)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
 
 
 class TestTightWindowVsAlarmMargin(StalenessContractTestBase):
@@ -364,3 +397,7 @@ class TestTightWindowVsAlarmMargin(StalenessContractTestBase):
             self.assertGreaterEqual(
                 elapsed, 0.5, 'renewal must come near the window end, not instantly')
         self.run_scenario(scenario)
+
+
+if __name__ == '__main__':
+    unittest.main()

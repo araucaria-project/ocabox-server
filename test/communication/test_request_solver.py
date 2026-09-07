@@ -6,8 +6,9 @@ import unittest
 from obcom.comunication.message_serializer import MessageSerializer
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
 from obsrv.tree_components.base_components.tree_component import ProvidesResponseProtocol
+from obcom.data_colection.response_error import ResponseError
 from obcom.data_colection.value import Value
-from obcom.data_colection.value_call import ValueRequest
+from obcom.data_colection.value_call import ValueRequest, ValueResponse
 from obsrv.communication.request_solver import RequestSolver
 from test.data_collection.sample_test_value_provider import SampleTestValueProvider
 
@@ -125,6 +126,23 @@ class RequestSolverTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(count_tasks(), task_on_start)
 
         await coro_test()
+
+    async def test_subtask_exception_is_normal(self):
+        """A sub-task raising -> 4001 NORMAL (decode with ValueResponse.from_byte)."""
+        class _FailingRequestSolver(RequestSolver):
+            async def get_single_answer(self, request: bytes, user_id: bytes, timeout=None) -> bytes:
+                raise RuntimeError("sub-task failed unexpectedly")
+
+        rs = _FailingRequestSolver(None)
+        sample_request = {'address': {'adr': 'sample_telescope.any_val'}, 'time_of_data': 1655975599.883751,
+                          'time_of_data_tolerance': 20.0}
+        packed_request = MessageSerializer.pack_b(sample_request)
+        answer = await rs.get_answer([packed_request], user_id=b'12345')
+        self.assertEqual(len(answer), 1)
+        response = ValueResponse.from_byte(answer[0])
+        self.assertFalse(response.status)
+        self.assertEqual(response.error.code, 4001)
+        self.assertEqual(response.error.severity, ResponseError.SEVERITY_NORMAL)
 
 
 if __name__ == '__main__':

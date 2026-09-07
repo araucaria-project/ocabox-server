@@ -3,6 +3,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.8.0]
+### Changed
+- Severity audit: 3003 subcontractor catch-all, 4001 solver sub-task failures and 4002 are NORMAL; the 2003 counter/T2 verdict severity is capped at NORMAL. CRITICAL stays with configuration-fixed causes (1002, 3001, 3002, 4003, 4006).
+- doc/errors.md: rule for choosing CRITICAL; 3003 registered.
+
 ## [2.7.2]
 ### Changed
 - ocabox-common pinned to the 1.4.0 release (git tag/rev) and checked at import time.
