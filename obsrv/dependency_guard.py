@@ -3,7 +3,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from packaging.version import Version
 
-REQUIRED = {"ocabox-common": "1.4.0"}
+REQUIRED = {"ocabox-common": "1.6.0"}  # obcom.optics (optical-element kinds)
 
 
 def check_dependency_versions(installed=version) -> None:

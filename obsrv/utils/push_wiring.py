@@ -42,13 +42,17 @@ def _walk_components(component) -> Iterator:
         if hasattr(c, 'get_list_providers'):
             for p in c.get_list_providers():
                 yield from visit(p)
+        if hasattr(c, 'get_default_provider'):
+            yield from visit(c.get_default_provider())
 
     yield from visit(component)
 
 
 def assert_push_wiring(root) -> None:
     """Walk the subtree under ``root`` and verify every provider with
-    ``PUSH_DRIVEN=True`` has had ``set_change_notifier(...)`` called.
+    ``PUSH_DRIVEN=True`` has had ``set_change_notifier(...)`` called and
+    every provider with ``VALUE_PUSHING=True`` has had ``set_value_sink(...)``
+    called.
 
     Raises ``AssertionError`` with a message naming the offending
     provider and pointing at the tree-build factory if any wiring is
@@ -56,15 +60,14 @@ def assert_push_wiring(root) -> None:
     """
     missing: list[str] = []
     for c in _walk_components(root):
-        if getattr(c, 'PUSH_DRIVEN', False):
-            if getattr(c, '_change_notifier', None) is None:
-                name = c.get_name() if hasattr(c, 'get_name') else repr(c)
-                missing.append(f"{name} ({type(c).__name__})")
+        name = c.get_name() if hasattr(c, 'get_name') else repr(c)
+        if getattr(c, 'PUSH_DRIVEN', False) and getattr(c, '_change_notifier', None) is None:
+            missing.append(f"{name} ({type(c).__name__}): add `provider.set_change_notifier(cache._report_new_value)`")
+        if getattr(c, 'VALUE_PUSHING', False) and getattr(c, '_value_sink', None) is None:
+            missing.append(f"{name} ({type(c).__name__}): add `provider.set_value_sink(cache.push_value)`")
     if missing:
         raise AssertionError(
-            "PUSH_DRIVEN providers missing change-notifier wiring:\n  "
+            "Push providers missing their wiring:\n  "
             + "\n  ".join(missing)
-            + "\nAdd `provider.set_change_notifier(cache._report_new_value)` "
-              "in the tree-build factory for each of these — see the assembly "
-              "of similar providers nearby."
+            + "\nWire them in the tree-build factory, next to the assembly of similar providers."
         )

@@ -252,6 +252,28 @@ class TreeCache(TreeBaseProvider):
                         await self._report_new_value()  # report that there is new value if conditional_freezer is known
                     kv.value = value
 
+    async def push_value(self, address: Address, value: Value) -> None:
+        """Store a value that a provider below this cache learned without being asked (a NATS
+        subscription), as if it had answered a request: a newer ``ts`` replaces the stored value,
+        and a change — including the first value and the first one after a failure — bumps
+        ``change_time`` and wakes waiting cycle-query subscribers within this loop tick.
+
+        A value not newer than the stored one is ignored, so a late message never rolls state back.
+        """
+        kv = self._find_in_known_values(address)
+        if kv is None:
+            # nobody has asked for this address yet, so nobody waits on it
+            self._add_known_value(self._KnownValue(address=address, value=value, task=None, change_time=value.ts))
+            return
+        if kv.value is not None and value.ts <= kv.value.ts:
+            return
+        changed = kv.value is None or kv.had_failure or self._is_changed(new_v=value, old_v=kv.value)
+        kv.value = value
+        kv.had_failure = False
+        if changed:
+            kv.change_time = value.ts
+            await self._report_new_value()
+
     def _remove_the_value_lock(self, address, known_value: _KnownValue = None):
         kv = known_value if known_value else self._find_in_known_values(address)
         try:
