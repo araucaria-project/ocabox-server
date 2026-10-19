@@ -6,6 +6,7 @@ from packaging.version import Version
 REQUIRED = {
     "ocabox-common": "1.6.0",  # obcom.optics (optical-element kinds)
     "datamodels": "0.5.0",  # datamodels.messages (NATS service driver)
+    "serverish": "2.2.1",  # TreeNatsService: on 2.0.x it subscribes but never receives the status
 }
 
 
