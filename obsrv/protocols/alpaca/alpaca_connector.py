@@ -116,19 +116,6 @@ class AlpacaConnector(Connector):
                 self._create_permanent_http_session()
         return self._http_session
 
-    def create_http_session_sync(self, loop):
-        """
-        This method is synchronous version of method 'create_http_session()'. It is not recommended to use this method
-        as the connection requires a loop to work properly. It is recommended to use method create_http_session()
-        instead.
-
-        :param loop: async loop
-        :return: http session or None if it cannot get or create session.
-        """
-        logger.warning(f"DeprecationWarning. Creating a new connection should be created within an async function, It "
-                       f"is suggested to use the create_http_session() method.")
-        self._create_permanent_http_session(loop=loop)
-
     async def create_http_session(self, loop=None) -> None or aiohttp.ClientSession:
         """
         This method create new async http session if not exists yet and return it. If the session already exists it

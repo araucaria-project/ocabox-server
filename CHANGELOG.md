@@ -2,6 +2,10 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+### Removed
+- `AlpacaConnector.create_http_session_sync` — deprecated, unused, and unusable with current aiohttp (a session must be created inside a running loop; `get_http_session` does it lazily).
+### Fixed
+- Tests: stale imports (`ReservationError`, `obsrv.data_collection.alpaca_api`) and the special-permission test now pin the 2.1.0 contract (the flag alone bypasses the reservation).
 
 ## [2.10.0]
 ### Added
