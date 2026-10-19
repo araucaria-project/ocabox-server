@@ -3,6 +3,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.10.0]
+### Added
+- `TreeNatsService`: the generic NATS protocol driver. A TIC subtree `<scope>.<realm>` is served by a NATS service under the subject grammar of oca_nats_config#2 — GETs from `status.<realm>.<scope>.<element>.<item>` (subscribed, pushed into the cache, served from memory while the service is alive; silent for 3 × keepalive ⇒ 4005), PUTs as RPC on `rpc.<realm>.<scope>.<element>.<item>` with the caller and the remaining deadline forwarded and the blocker's gate parameters stripped. Liveness by broker clock from status messages and `svc.heartbeat.<service_type>.<variant>`. Service refusals keep their obcom code; no responder ⇒ 4005, no answer in time ⇒ 4002, reply outside the contract ⇒ 2002. Place it under the telescope's blocker.
+### Changed
+- New dependency `datamodels` (>= 0.5.0, `datamodels.messages`), checked by the import guard.
+
 ## [2.9.0]
 ### Added
 - Optical-path components without a device in TIC (`sky`, `flatscreen`, `lamp`, `fiber`, `splitter`, `mirror`, `spectrograph`, … — the kinds of `obcom.optics`) become inert `OpticalElement` nodes: their configuration (`optics:`, `positions:`, `paths:`, `light:`) is published with the rest, they never reach a connector, and every request gets 3002 CRITICAL. A TIC device class for a kind takes precedence (D-F1, #52).
