@@ -4,3 +4,4 @@ from obsrv.tree_components.specialized_components.tree_conditional_freezer impor
 from obsrv.tree_components.specialized_components.tree_base_request_blocker import TreeBaseRequestBlocker
 from obsrv.tree_components.specialized_components.tree_custom_guider_handler import TreeCustomGuiderHandler
 from obsrv.tree_components.specialized_components.tree_ephemeris import TreeEphemeris
+from obsrv.tree_components.specialized_components.tree_nats_service import TreeNatsService

@@ -3,7 +3,10 @@ from importlib.metadata import PackageNotFoundError, version
 
 from packaging.version import Version
 
-REQUIRED = {"ocabox-common": "1.6.0"}  # obcom.optics (optical-element kinds)
+REQUIRED = {
+    "ocabox-common": "1.6.0",  # obcom.optics (optical-element kinds)
+    "datamodels": "0.5.0",  # datamodels.messages (NATS service driver)
+}
 
 
 def check_dependency_versions(installed=version) -> None:

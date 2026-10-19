@@ -2,16 +2,15 @@
 .idea/
 __pycache__
 
-ob/router/__pycache__/
 poetry.lock
 
 ocabox.egg-info/
 
-ob/configuration/*
-!ob/configuration/.gitkeep
-!ob/configuration/__init__.py
-!ob/configuration/tree_build_example.py
-!ob/configuration/sample_config.yaml
+obsrv/configuration/*
+!obsrv/configuration/.gitkeep
+!obsrv/configuration/__init__.py
+!obsrv/configuration/tree_build_example.py
+!obsrv/configuration/sample_config.yaml
 
 
 venv/
