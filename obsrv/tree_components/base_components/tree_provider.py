@@ -4,6 +4,7 @@ from typing import Awaitable, Callable, ClassVar, List, Optional
 from obsrv.tree_components.base_components.address_dispatcher import AddressDispatcher
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
 from obsrv.tree_components.base_components.tree_component import ProvidesResponseProtocol
+from obcom.data_colection.address import Address
 from obcom.data_colection.response_error import ResponseError
 from obcom.data_colection.value import Value
 from obcom.data_colection.value_call import ValueRequest, ValueResponse
@@ -37,11 +38,21 @@ class TreeProvider(TreeBaseProvider, AddressDispatcher):
     COMPONENT_DEFAULT_NAME: str = 'TreeProvider'
 
     PUSH_DRIVEN: ClassVar[bool] = False
+    #: Subclasses that receive *values* from outside without being asked (a NATS subscription) set
+    #: this to True; tree-build must then wire ``set_value_sink`` to the enclosing cache's
+    #: ``push_value``. Waking subscribers is not enough there: the value itself has to reach the cache.
+    VALUE_PUSHING: ClassVar[bool] = False
 
     def __init__(self, component_name: str, source_name: str, subcontractor: ProvidesResponseProtocol = None,
                  **kwargs):
         super().__init__(component_name=component_name, subcontractor=subcontractor, source_name=source_name, **kwargs)
         self._change_notifier: Optional[Callable[[], Awaitable[None]]] = None
+        self._value_sink: Optional[Callable[[Address, Value], Awaitable[None]]] = None
+
+    def set_value_sink(self, sink: Callable[[Address, Value], Awaitable[None]]) -> None:
+        """Wire the callable that stores a pushed value in the enclosing cache
+        (``TreeCache.push_value``). Called during tree-build for ``VALUE_PUSHING`` providers."""
+        self._value_sink = sink
 
     def set_change_notifier(self, notify: Callable[[], Awaitable[None]]) -> None:
         """Wire a callable that wakes up cycle-query subscribers.

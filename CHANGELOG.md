@@ -3,6 +3,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.9.0]
+### Added
+- Optical-path components without a device in TIC (`sky`, `flatscreen`, `lamp`, `fiber`, `splitter`, `mirror`, `spectrograph`, … — the kinds of `obcom.optics`) become inert `OpticalElement` nodes: their configuration (`optics:`, `positions:`, `paths:`, `light:`) is published with the rest, they never reach a connector, and every request gets 3002 CRITICAL. A TIC device class for a kind takes precedence (D-F1, #52).
+- `TreeCache.push_value(address, value)`: a provider that learns values without being asked stores them in the cache, and waiting cycle-query subscribers get a change within the same loop tick. Providers declare `VALUE_PUSHING` and are wired with `set_value_sink(cache.push_value)`.
+### Changed
+- A component that cannot be built from the configuration (unknown or missing `kind`, constructor error) is skipped with an ERROR naming it; its siblings and the published `observatory` block survive. Before, one such component emptied the whole telescope with a WARNING.
+- `assert_push_wiring` checks `VALUE_PUSHING` providers too and walks broker default providers.
+- Requires ocabox-common >= 1.6.0 (import guard).
+
 ## [2.8.1]
 ### Changed
 - `ocabox-common` dependency follows git master again (no tag pin); the import guard keeps the 1.4.0 minimum.

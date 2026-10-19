@@ -8,6 +8,7 @@ from typing import Optional, Union, List, MutableMapping, Dict, Coroutine, Calla
 
 from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
 from obcom.data_colection.value import TreeValueError
+from obcom.optics import DEFAULT_REGISTRY as OPTICAL_KINDS
 
 from obsrv.protocols import create_connector
 from obsrv.utils.coordinates import check_equatorial_coordinates, check_horizontal_coordinates
@@ -44,10 +45,18 @@ class Component:
         except KeyError:
             child_options = {}
         for cid, op in child_options.items():
-            child = self._create_component(kind=op['kind'], sys_id=self.sys_id + '.' + cid, parent=self)
+            sys_id = self.sys_id + '.' + cid
+            # One broken component must not take its siblings (and the published configuration) down with it.
+            try:
+                if not isinstance(op, dict) or 'kind' not in op:
+                    raise ComponentConfigError(f"{sys_id}: component has no 'kind'")
+                child = self._create_component(kind=op['kind'], sys_id=sys_id, parent=self)
+                child._setup(op)
+            except Exception:
+                logger.exception(f"Component {sys_id} skipped: it could not be built from the configuration")
+                continue
             self.children[cid] = child
             setattr(self, cid, child)  # allow easy navigation: `parent.child`
-            child._setup(op)
 
     @property
     def device_nr(self) -> int:
@@ -111,7 +120,47 @@ class Component:
 
     @classmethod
     def _create_component(cls, kind: str, sys_id: str, parent: 'Component') -> 'Component':
-        return _component_classes[kind](sys_id=sys_id, parent=parent)
+        """A TIC device class when one exists for ``kind``; otherwise an :class:`OpticalElement` when the
+        optical-path model knows the kind; otherwise the configuration is wrong."""
+        device_class = _component_classes.get(kind)
+        if device_class is not None:
+            return device_class(sys_id=sys_id, parent=parent)
+        if kind in OPTICAL_KINDS:
+            return OpticalElement(sys_id=sys_id, parent=parent, kind=kind)
+        raise ComponentConfigError(f"{sys_id}: unknown component kind {kind!r}")
+
+
+class ComponentConfigError(ValueError):
+    """The configuration of a component cannot be turned into a tree node."""
+
+
+class OpticalElement(Component):
+    """A component of the optical path with no device behind it in TIC: sky, flat screen, lamps,
+    fibres, beam splitters, mirrors driven by another system (BESO M4/M5), a spectrograph served
+    elsewhere. It keeps the configuration one tree (its ``optics:``, ``positions:``, ``paths:``,
+    ``light:`` are published with the rest), has no connector, and answers every request with
+    3002 — it never falls through to an ALPACA endpoint.
+
+    When TIC gains a device class for one of these kinds, that class takes precedence."""
+    KIND = "optical_element"
+
+    def __init__(self, sys_id: str, parent: Union['Component', None], kind: str) -> None:
+        super().__init__(sys_id=sys_id, parent=parent)
+        self.kind = kind
+
+    def _no_device(self, attribute: str):
+        raise TreeStructureError(
+            code=3002,
+            message=f"{self.sys_id} ({self.kind!r}) is an optical element without a device in TIC; "
+                    f"{attribute!r} cannot be served",
+            severity=TreeStructureError.SEVERITY_CRITICAL,
+        )
+
+    async def get(self, attribute: str, kind=None, **data):
+        self._no_device(attribute)
+
+    async def put(self, attribute: str, kind=None, **data):
+        self._no_device(attribute)
 
 
 class Observatory(Component):
