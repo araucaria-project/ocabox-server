@@ -2,7 +2,7 @@ import logging
 import time
 import unittest
 from obsrv.tree_components.base_components.tree_provider import TreeProvider
-from obsrv.tree_components.specialized_components import ReservationError, \
+from obsrv.tree_components.specialized_components.tree_base_request_blocker import ReservationError, \
     TreeBaseRequestBlocker
 from obcom.data_colection.tree_user import TreeServiceUser, TreeUser
 from obcom.data_colection.value import TreeValueError, Value
@@ -172,15 +172,16 @@ class TreeBaseRequestBlockerTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result.value)
         self.assertIsNone(result.error)
 
-        # with param and normal user
+        # with param and normal user: since 2.1.0 the flag alone bypasses the reservation — a
+        # TreeServiceUser is no longer required (only the safety cutoff resists the flag)
         user = TreeUser(name='some_user')
         user.socket_id = b'qweet234'
         request_data = {TreeBaseRequestBlocker.SPECIAL_PERMISSION_PARAM: True}
         req = ValueRequest('.'.join([self.provider_source_name, self.sample_provider_source_name, 'some_val']),
                            request_type='PUT', user=user, request_data=request_data)
         result = await self.provider.get_response(request=req)
-        self.assertIsNone(result.value)
-        self.assertTrue(result.error.code == 1004)
+        self.assertIsNotNone(result.value)
+        self.assertIsNone(result.error)
 
 
 if __name__ == '__main__':

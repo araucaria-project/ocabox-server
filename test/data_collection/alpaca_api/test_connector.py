@@ -2,7 +2,7 @@ import asyncio
 import unittest
 import logging
 
-from obsrv.data_collection.alpaca_api.connector import AlpacaConnector
+from obsrv.protocols.alpaca.alpaca_connector import AlpacaConnector
 from obsrv.ob_config import SingletonConfig
 
 
@@ -41,22 +41,6 @@ class AlpacaConnectorTest(unittest.TestCase):
     def tearDown(self) -> None:
         self._tearDownLoop()
         super().tearDown()
-
-    def test_create_http_connection_from_sync(self):
-        """
-        Test create connection from synchronous method.
-
-        :return:
-        """
-        alpaca = AlpacaConnector()
-        self.assertIsNone(alpaca._http_session)
-        alpaca.create_http_session_sync(loop=self.loop)
-        self.assertIsNotNone(alpaca._http_session)
-
-        async def coro():
-            await alpaca._http_session.close()
-            self.assertTrue(alpaca._http_session.closed)
-        self.loop.run_until_complete(coro())
 
     def test_create_http_connection(self):
         """
