@@ -486,3 +486,27 @@ class TestValuePolicyFieldReserved(unittest.TestCase):
         args = {'value_policy': 'none', 'real_param': 1}
         out = strip_tree_internal_fields(args)
         self.assertEqual(out, {'real_param': 1})
+
+
+class TestRateCap(unittest.TestCase):
+    """T0 (``delay``): never answer a subscription more often than its delay — counted from the
+    delivery, not from when the device was read."""
+
+    def test_from_the_arrival_when_the_value_served_was_old(self):
+        # served at 100.0 a value read at 99.5 (another subscriber keeps the cache fresh): the client
+        # asks again at once with no_send_before = 99.5 + 1.0
+        data = {'time_of_known_change': 99.5, 'no_send_before': 100.5}
+        self.assertEqual(TreeConditionalFreezer.send_not_before(data, arrival=100.0), 101.0)
+
+    def test_a_late_client_waits_no_longer_than_the_delay_after_the_read(self):
+        data = {'time_of_known_change': 99.5, 'no_send_before': 102.0}  # delay 2.5
+        self.assertEqual(TreeConditionalFreezer.send_not_before(data, arrival=99.6), 102.1)
+
+    def test_no_delay_declared(self):
+        self.assertEqual(TreeConditionalFreezer.send_not_before({}, arrival=100.0), 0)
+        self.assertEqual(TreeConditionalFreezer.send_not_before({'time_of_known_change': None, 'no_send_before': None}, arrival=100.0), 0)
+        self.assertEqual(TreeConditionalFreezer.send_not_before({'time_of_known_change': 99.0, 'no_send_before': 99.0}, arrival=100.0), 99.0)
+
+    def test_the_first_request_is_answered_at_once(self):
+        self.assertEqual(TreeConditionalFreezer.send_not_before({'no_send_before': 0}, arrival=100.0), 0)
+

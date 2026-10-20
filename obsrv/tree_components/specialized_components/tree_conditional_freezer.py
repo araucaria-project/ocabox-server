@@ -144,10 +144,11 @@ class TreeConditionalFreezer(TreeBaseProvider):
         # instant 4004s and never received a single value. The margin exists
         # to return the renewal BEFORE the client gives up waiting; a fifth
         # of the window (floored at 100 ms) achieves that at every scale.
-        window = timeout - time.time()
+        arrival = time.time()
+        window = timeout - arrival
         alarm_offset = min(self._alarm_timeout_offset, max(0.1, 0.2 * window))
         waiting_timeout = timeout - alarm_offset
-        wait_to = request.request_data.get('no_send_before', 0)
+        wait_to = self.send_not_before(request.request_data, arrival)
 
         # wait some before doing anything, no send message to fast
         # At this level, we do not check if there is a timeout because we assume that the client has configured the
@@ -390,6 +391,20 @@ class TreeConditionalFreezer(TreeBaseProvider):
             await asyncio.sleep(0)
             if is_event:  # event call
                 return True  # value was changed
+
+    @staticmethod
+    def send_not_before(request_data: dict, arrival: float) -> float:
+        """When this subscription may be answered at the earliest — T0, "not more often than
+        ``delay``". The client sends ``no_send_before = ts + delay`` with ``time_of_known_change =
+        ts`` of the value it got; but ``ts`` is when the device was read, and while another
+        subscriber keeps the cache fresh the value served was already old when delivered (a 1 s
+        subscriber beside a 0.5 s one got answers every 0.5 s). The client asks again as soon as
+        it is served, so the gate also runs from this request's arrival: ``arrival + delay``."""
+        no_send_before = request_data.get('no_send_before') or 0
+        known = request_data.get('time_of_known_change')
+        if known is None or no_send_before <= known:
+            return no_send_before
+        return max(no_send_before, arrival + (no_send_before - known))
 
     async def _delayer(self, wait_to, waiting_timeout):
         """The method implements the query delay, taking care not to exceed the timeout"""

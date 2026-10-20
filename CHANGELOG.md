@@ -3,6 +3,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.10.2]
+### Fixed
+- T0 (`delay` of a subscription — "not more often than this") is counted from the delivery, not from
+  when the device was read: the client sends `no_send_before = ts + delay`, and while another
+  subscriber kept the cache fresh the value served was already old, so a 1 s subscriber beside a
+  0.5 s one was answered every 0.5 s (measured on jk15's M3). `TreeConditionalFreezer` gates on
+  `max(no_send_before, arrival + delay)` (`send_not_before`); no protocol change.
+
 ## [2.10.1]
 ### Changed
 - Requires serverish >= 2.2.1, checked by the import guard: with 2.0.x `TreeNatsService` subscribes to the service's status but never receives it, so every GET is 4005 (found running the TIC ↔ NATS ↔ optics chain).
