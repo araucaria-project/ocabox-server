@@ -2,6 +2,10 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+
+## [2.10.1]
+### Changed
+- Requires serverish >= 2.2.1, checked by the import guard: with 2.0.x `TreeNatsService` subscribes to the service's status but never receives it, so every GET is 4005 (found running the TIC ↔ NATS ↔ optics chain).
 ### Removed
 - `AlpacaConnector.create_http_session_sync` — deprecated, unused, and unusable with current aiohttp (a session must be created inside a running loop; `get_http_session` does it lazily).
 ### Fixed
