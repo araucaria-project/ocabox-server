@@ -1,0 +1,386 @@
+# BESO mapping configuration for the OCABOX server.
+#
+# Source of truth: "The BESO Manual" v3.00 (2026-08-15), client.c (6.4.2026) and the observing documents.
+# Validate after every edit:   python -m obsrv.protocols.beso.beso_config [path]
+#
+# Conventions
+#   * Commands are written in upper case: the BESO CLI upper-cases every command before sending it
+#     (the manual writes "SET CALIB ThAr ON", the server receives "SET CALIB THAR ON").
+#   * YAML 1.1 turns unquoted ON/OFF/YES/NO into booleans: always quote them ("ON", "OFF").
+#   * Regexes are single-quoted so that backslashes stay literal.
+#   * "todo:" marks a mapping or reply format that is NOT documented and must be verified on the device.
+#     An unverified regex that does not match produces error 2002 with the raw reply in the log,
+#     never a silently wrong value.
+#   * [W] in a comment = ALPACA name used for a class whose OCABOX interface was not given (to verify).
+#
+# Parameter forms (components.<kind>/<device_number>.parameters.<name>):
+#   get: <query name or inline command>   parse: [steps]   interval: <s> | connection
+#   exposure: <state|percent|imageready|lastduration|laststart|lastfile|lastsnr>
+#   constant: <value>
+#   sources: [ {get|exposure|constant, parse, optional}, ... ]   combine: [steps]
+#   unsupported: <reason>                                       -> error 3002 (CRITICAL)
+#   put: "<COMMAND {value}>"  arg: <ClientArg>  format: [steps]  (shorthand)
+#   put: {args, steps, accept, invalidates, blocked_during_exposure, ...}   (full form, as in actions)
+# Action steps: {command: "...", expect: '<regex>', timeout: s} | {delay: s} | {wait_until: {get, parse, timeout, interval}}
+
+settings:
+  timeouts:
+    connect: 5.0
+    write: 5.0
+    command: 5.0          # default reply timeout; typical replies take 10-30 ms, SET CALIB ~1.3 s
+    close: 2.0
+  framing:
+    command_terminator: ""            # TODO: client.c sends commands without a terminator; verify with tcpdump
+    reply_terminators: ["\n", "\0"]   # TODO: reply framing is undocumented; idle_gap is the fallback
+    idle_gap: 0.1                     # silence after the first reply byte that ends a reply without terminator
+    max_reply_bytes: 4096             # client.c reads at most 4097 bytes per reply
+    max_command_bytes: 1023           # client.c MAX_CMD_SIZE - 1
+    encoding: latin-1                 # FITS strings may use 0x20..0xFE
+  queue:
+    control: 4        # abortexposure; never blocked by a full write/read lane
+    monitor: 2
+    write: 16
+    read: 32
+    background: 2
+  backoff:
+    initial: 1.0
+    factor: 2.0
+    maximum: 60.0
+    jitter: 0.2
+  default_interval: 60.0
+  min_poll_interval: 5.0      # the manual: polling "on the scale of seconds ... will kill the operations"
+  max_job_seconds: 60.0       # upper bound for the time one composite command may hold the link
+  keepalive_interval: 300.0   # probe an idle link with the health query; 0 = off
+  log_repeat_interval: 300.0
+  tcp_keepalive: true
+  error_pattern: '^\s*ERROR:'
+  forbidden_commands:         # never sent, whatever the mappings say
+    - '^\s*(QUIT|EXIT)\b'                    # stops the BESO server (needs ssh server_start)
+    - '^\s*RESTART\s+(PC|CAMERA)\b'          # reboots the PC / power-cycles the cold camera
+    - '^\s*START\s+EXPOSURE\b.*\bWAIT\b'     # blocks the only link until read-out; abort impossible
+    - '^\s*WAIT\s+CAMERA\s+TEMP\b'           # blocks the link until the temperature settles
+    - '^\s*SET\s+CALIB\s+TOGGLEM5\b'         # emergency procedure, operator only
+    - '^\s*(DISCONNECT|BYE|SLEEP)\b'         # CLI-side commands, not understood by the server
+  extra_kinds: []
+  health:
+    query: uptime_server
+    parse: [regex: '(\d+(?:\.\d+)?)', float]   # TODO: UPTIME SERVER reply format undocumented
+  exposure:
+    status_query: camera_status
+    min_poll: 5.0             # status polls never closer than this
+    max_poll: 60.0            # status polled at least this often during long exposures
+    idle_interval: 300.0      # camerastate re-read from BESO at most this often while idle
+    readout_estimate: 22.0    # s, until the first status reply tells the real read-out time (1 MHz, 1 port: 21.7 s)
+    patterns:
+      # 'READY: START EXPOSURE 40.00 s; peak SNR=233.4; file /data/fits/jk15/BESO/1267/jk15s_1267_68008.fits.fz'
+      ready: '^READY:\s*START EXPOSURE\s+(?P<duration>[0-9.]+)\s*s\b(?:.*?\bpeak SNR=(?P<snr>[0-9.]+))?.*?\bfile\s+(?P<file>\S+)'
+      # 'INFO: CAMERA exposing; 15 sec. left (7 exp./ 8 read)'
+      exposing: '(?i)^INFO:.*?\bexposing\b.*?\(\s*(?P<exp>\d+)\s*exp\.?\s*/\s*(?P<read>\d+)\s*read\s*\)'
+      # 'INFO: CAMERA reading - 6 sec. left (0 exp./ 6 read)'
+      reading: '(?i)^INFO:.*?\breading\b.*?\(\s*(?P<exp>\d+)\s*exp\.?\s*/\s*(?P<read>\d+)\s*read\s*\)'
+      # 'INFO: is IDLE; no file was generated since server start' / 'INFO: camera is IDLE; last file was ...'
+      idle: '(?i)^INFO:.*\bIDLE\b'
+
+queries:
+  temperatures:
+    command: "GET TEMP"        # 'INFO: T_OUT=16.25 T_INSIDE=16.06 T_FLUID=13.94 T_CAMERA=15.13 T_CCD=-60.00 T_SET=-75'
+    expect: '\bT_CCD=\S+.*\bT_SET=\S+'
+  camera_status:
+    command: "GET CAMERA STATUS"   # side effect: writes the FITS file when the read-out is over
+    timeout: 30.0                  # file creation + fpack + NFS (~1.4 s measured)
+  shutter:
+    command: "GET SHUTTER"     # 'INFO: SHUTTER STATUS NORMAL (S00000000E)'
+    expect: '\(S\d{8}E\)'
+  camera_gain:
+    command: "GET CAMERA GAIN"
+    todo: "reply format undocumented"
+  camera_speed:
+    command: "GET CAMERA SPEED"
+    todo: "reply format undocumented (HIGH/MIDDLE/LOW or kHz)"
+  calib_flat:
+    command: "GET CALIB FLAT"
+    timeout: 10.0
+    todo: "reply format undocumented"
+  calib_thar:
+    command: "GET CALIB THAR"
+    timeout: 10.0
+    todo: "reply format undocumented"
+  camera_sensor:
+    command: "CAMERA SENSOR"
+    todo: "reply format undocumented"
+  camera_identify:
+    command: "IDENTIFY CAMERA"
+    todo: "reply format undocumented"
+  camera_serial:
+    command: "CAMERA SERIAL"
+    todo: "reply format undocumented"
+  uptime_server:
+    command: "UPTIME SERVER"
+    todo: "reply format undocumented"
+
+components:
+
+  # ------------------------------------------------------------------------------------------ camera
+  camera/0:
+    parameters:
+      sensorname:
+        get: camera_sensor
+        parse:
+          - regex: '^(?:INFO|READY):\s*(?:CAMERA\s+SENSOR\s*[:=]?\s*)?(.+?)\s*$'
+          - strip: " '"
+        interval: connection
+        todo: "check the CAMERA SENSOR reply; expected to contain e.g. 'E2V 4096 x 4096 (CCD 230-84)(B)(MP)'"
+      description:                    # [W] model and serial number
+        sources:
+          - get: camera_identify
+            parse: [regex: '^(?:INFO|READY):\s*(?:IDENTIFY\s+CAMERA\s*[:=]?\s*)?(.+?)\s*$', strip: " '"]
+          - get: camera_serial
+            parse: [regex: '(\d{5,})']
+        combine: [template: "{0} SN {1}"]
+        interval: connection
+        todo: "check the IDENTIFY CAMERA and CAMERA SERIAL replies"
+
+      ccdtemperature:
+        get: temperatures
+        parse: [kv, field: T_CCD, float]
+        interval: 60
+      setccdtemperature:
+        get: temperatures
+        parse: [kv, field: T_SET, float]
+        interval: 60
+        put: "SET CAMERA TEMP {value}"
+        arg: SetCCDTemperature
+        # The firmware works in whole degrees; +10 is used to warm up before a shutdown.
+        format: [float, check_range: {min: -100, max: 30}, int: {rounding: half_up}, format: "d"]
+        todo: "check whether SET CAMERA TEMP accepts a sign (+10) and only integers"
+      cooleron:                       # cooling is always active, driven by the set point
+        constant: true
+        put: {accept: {arg: CoolerOn, values: [true], convert: [bool]}}
+      coolerpower:
+        unsupported: "BESO does not report the cooler power"
+
+      camerastate:
+        sources:
+          # A shutter fault (second status digit != 0) overrides the exposure state with 5 (error).
+          - get: shutter
+            parse: [regex: '\(S\d(\d)\d{6}E\)', map: {values: {"0": null}, default: 5}]
+            optional: true            # if GET SHUTTER fails, fall back to the exposure state
+          - exposure: state
+        combine: [first_not_null]
+        interval: 60
+        todo: "shutter error digits 3/4 may be transient while the shutter opens; verify on the device"
+      percentcompleted:
+        exposure: percent
+      imageready:
+        exposure: imageready
+      lastexposureduration:
+        exposure: lastduration
+      lastexposurestarttime:          # unix time when BESO confirmed the start (about 0.3 s after the request)
+        exposure: laststart
+
+      gain:
+        get: camera_gain
+        parse: [regex: '\b(HIGH|MIDDLE|LOW)\b', map: {values: {LOW: 0, HIGH: 1}}]
+        interval: 300
+        put: "SET CAMERA GAIN {value}"
+        arg: Gain
+        format: [int, map: {values: {0: LOW, 1: HIGH}}]
+      gains:
+        constant: [LOW, HIGH]         # the SOPHIA firmware supports only these two (GAIN-MOD 1=LOW, 2=HIGH)
+      offset:
+        constant: 0
+        put: {accept: {arg: Offset, values: [0], convert: [int]}}
+      offsets:
+        unsupported: "BESO has no offset setting"
+      offsetmin: {constant: 0}
+      offsetmax: {constant: 0}
+      subexposureduration:
+        unsupported: "BESO has no sub-exposures"
+
+      readoutmode:
+        get: camera_speed
+        parse:
+          - regex: '\b(HIGH|MIDDLE|LOW|3000|1000|100)\b'
+          - map: {values: {HIGH: 0, MIDDLE: 1, LOW: 2, "3000": 0, "1000": 1, "100": 2}}
+        interval: 300
+        put: "SET CAMERA SPEED {value}"
+        arg: ReadoutMode
+        format: [int, map: {values: {0: HIGH, 1: MIDDLE, 2: LOW}}]
+      readoutmodes:
+        constant: ["HIGH (3 MHz)", "MIDDLE (1 MHz)", "LOW (100 kHz)"]
+      fastreadout:
+        unsupported: "use readoutmode; BESO read-out speed has three steps (decision D4)"
+
+      binx:
+        constant: 1
+        put: {accept: {arg: BinX, values: [1], convert: [int]}}
+      biny:
+        constant: 1
+        put: {accept: {arg: BinY, values: [1], convert: [int]}}
+      numx:
+        constant: 4096
+        put: {accept: {arg: NumX, values: [4096], convert: [int]}}
+      numy:
+        constant: 4096
+        put: {accept: {arg: NumY, values: [4096], convert: [int]}}
+      startx:
+        constant: 0
+        put: {accept: {arg: StartX, values: [0], convert: [int]}}
+      starty:
+        constant: 0
+        put: {accept: {arg: StartY, values: [0], convert: [int]}}
+      cameraxsize: {constant: 4096}   # NAXIS1 in the BESO FITS header
+      cameraysize: {constant: 4096}
+      imagearray:
+        unsupported: "BESO writes the FITS file itself; see beso_last_file (decision D3)"
+      imagearrayvariant:
+        unsupported: "BESO writes the FITS file itself; see beso_last_file (decision D3)"
+
+      # [W] ALPACA capability flags, from documented BESO behaviour
+      canabortexposure: {constant: true}
+      canstopexposure: {constant: false}
+      hasshutter: {constant: true}
+      cansetccdtemperature: {constant: true}
+      cangetcoolerpower: {constant: false}
+      canfastreadout: {constant: false}
+      canasymmetricbin: {constant: false}
+      maxbinx: {constant: 1}
+      maxbiny: {constant: 1}
+
+      # BESO-specific extras (not ALPACA)
+      beso_last_file:
+        exposure: lastfile
+      beso_last_snr:
+        exposure: lastsnr
+      beso_shutter_status:
+        get: shutter
+        parse: [regex: '\((S\d{8}E)\)']
+        interval: 60
+      beso_t_out:
+        get: temperatures
+        parse: [kv, field: T_OUT, float]
+        interval: 60
+      beso_t_inside:
+        get: temperatures
+        parse: [kv, field: T_INSIDE, float]
+        interval: 60
+      beso_t_fluid:
+        get: temperatures
+        parse: [kv, field: T_FLUID, float]
+        interval: 60
+      beso_t_camera:
+        get: temperatures
+        parse: [kv, field: T_CAMERA, float]
+        interval: 60
+
+    actions:
+      startexposure:
+        handler: exposure_start
+        duration_arg: Duration
+        args:
+          Duration: [float, check_range: {min: 0.0, max: 7200.0}, format: ".2f"]
+          Shutter: {from: Light, convert: [bool, map: {values: {true: NORMAL, false: CLOSE}}]}
+        steps:
+          # The shutter mode persists in BESO, so it is set before every exposure (dark -> CLOSE, light -> NORMAL).
+          - command: "SET SHUTTER {Shutter}"
+          - command: "SET CAMERA EXPOSURE {Duration}"   # manual: EXPOTIME/EXPTIME; all scripts use EXPOSURE
+          - command: "START EXPOSURE"                    # NOWAIT; progress is read with GET CAMERA STATUS
+            expect: '(?i)^INFO:.*\bSTARTED\b'
+        invalidates: [shutter]
+        max_queue_wait: 25.0
+      abortexposure:
+        handler: exposure_abort
+        steps:
+          - command: "ABORT CAMERA EXPOSURE"
+        todo: "ABORT reply format and the camera state after an abort are undocumented"
+      stopexposure:
+        unsupported: "BESO can only abort; data accumulated so far cannot be read out (decision D2)"
+
+  # ----------------------------------------------------------- calibration unit: white-light FLAT lamp [W]
+  covercalibrator/0:
+    parameters:
+      calibratorstate:                # ASCOM CalibratorStatus: 1 Off, 3 Ready
+        get: calib_flat
+        parse: [regex: '\b(ON|OFF)\b', map: {values: {"ON": 3, "OFF": 1}}]
+        interval: 30
+      brightness:
+        get: calib_flat
+        parse: [regex: '\b(ON|OFF)\b', map: {values: {"ON": 1, "OFF": 0}}]
+        interval: 30
+      maxbrightness: {constant: 1}
+      coverstate: {constant: 0}       # ASCOM CoverStatus.NotPresent
+    actions:
+      calibratoron:
+        args:
+          Brightness: {convert: [int, check_range: {min: 1, max: 1}], default: 1}
+        steps:
+          - command: "SET CALIB FLAT ON"     # switches the ThAr lamp off if it was on
+        invalidates: [calib_flat, calib_thar]
+        clear_markers: [thar_on]
+      calibratoroff:
+        steps:
+          - command: "SET CALIB FLAT OFF"
+        invalidates: [calib_flat]
+      opencover: {unsupported: "the BESO calibration unit has no cover"}
+      closecover: {unsupported: "the BESO calibration unit has no cover"}
+      haltcover: {unsupported: "the BESO calibration unit has no cover"}
+
+  # ---------------------------------------------------------------- calibration unit: ThAr lamp [W]
+  covercalibrator/1:
+    parameters:
+      calibratorstate:
+        get: calib_thar
+        parse: [regex: '\b(ON|OFF)\b', map: {values: {"ON": 3, "OFF": 1}}]
+        interval: 30
+        # The hardware watchdog switches ThAr off after 30 min and BESO does not see it (manual 3.8).
+        expire_marker: {marker: thar_on, after: 1800, value: 4}    # 4 = Unknown
+      brightness:
+        get: calib_thar
+        parse: [regex: '\b(ON|OFF)\b', map: {values: {"ON": 1, "OFF": 0}}]
+        interval: 30
+      maxbrightness: {constant: 1}
+      coverstate: {constant: 0}
+    actions:
+      calibratoron:
+        args:
+          Brightness: {convert: [int, check_range: {min: 1, max: 1}], default: 1}
+        steps:
+          - command: "SET CALIB THAR ON"      # switches the FLAT lamp off if it was on
+        invalidates: [calib_thar, calib_flat]
+        set_markers: [thar_on]
+      calibratoroff:
+        steps:
+          - command: "SET CALIB THAR OFF"
+        invalidates: [calib_thar]
+        clear_markers: [thar_on]
+      opencover: {unsupported: "the BESO calibration unit has no cover"}
+      closecover: {unsupported: "the BESO calibration unit has no cover"}
+      haltcover: {unsupported: "the BESO calibration unit has no cover"}
+
+  # ------------------------------------------------- fibre injection mirror M5 as switch 0, Id 0 [W]
+  switch/0:
+    parameters:
+      maxswitch: {constant: 1}
+      getswitchname: {constant: "M5"}
+      getswitchdescription: {constant: "BESO M5 mirror: calibration fibre into the target fibre"}
+      canwrite: {constant: true}
+      minswitchvalue: {constant: 0.0}
+      maxswitchvalue: {constant: 1.0}
+      switchstep: {constant: 1.0}
+      getswitch:
+        unsupported: "BESO documents no GET for M5 (TODO: check whether GET CALIB M5 exists)"
+      getswitchvalue:
+        unsupported: "BESO documents no GET for M5 (TODO: check whether GET CALIB M5 exists)"
+    actions:
+      setswitch:
+        args:
+          Id: [int, check_range: {min: 0, max: 0}]
+          State: [bool, map: {values: {true: "ON", false: "OFF"}}]
+        steps:
+          - command: "SET CALIB M5 {State}"
+      setswitchvalue:
+        args:
+          Id: [int, check_range: {min: 0, max: 0}]
+          Value: [float, map: {values: {0: "OFF", 1: "ON"}}]
+        steps:
+          - command: "SET CALIB M5 {Value}"
