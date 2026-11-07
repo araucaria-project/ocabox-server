@@ -20,7 +20,8 @@ JK15_LIKE = {
         'flatscreen': {'kind': 'flatscreen'},
         'dome': {'kind': 'dome', 'optics': {'inputs': {'open': 'sky', 'flat': 'flatscreen'}}},
         'tertiary': {
-            'kind': 'tertiaryOCA',
+            'kind': 'tertiary',
+            'driver': 'asa-autoslew',
             'positions': {'beso': {'port': 1}, 'andor': {'port': 2}},
             'optics': {'from': 'dome'},
         },

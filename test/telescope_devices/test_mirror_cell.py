@@ -519,12 +519,15 @@ class MirrorCellACCCommandsTest(unittest.IsolatedAsyncioTestCase):
 
 
 class MirrorCellKindRegistrationTest(unittest.TestCase):
-    """Both kinds are resolvable from the tree builder."""
+    """The tree builder resolves the contract, the ACC driver and the deprecated vendor kind."""
 
     def test_kinds_registered(self):
-        from obsrv.telescope_devices.device_tree import _component_classes
-        self.assertIs(_component_classes['mirrorcell'], MirrorCell)
-        self.assertIs(_component_classes['mirrorcellACC'], MirrorCellACC)
+        from obsrv.telescope_devices.device_tree import Component
+        build = Component._create_component
+        self.assertIs(type(build(kind='mirrorcell', sys_id='t.m1', parent=None)), MirrorCell)
+        self.assertIs(type(build(kind='mirrorcell', sys_id='t.m1', parent=None, driver='asa-acc')), MirrorCellACC)
+        with self.assertLogs('device_tree', level='WARNING'):
+            self.assertIs(type(build(kind='mirrorcellACC', sys_id='t.m1', parent=None)), MirrorCellACC)
 
     def test_acc_is_a_mirror_cell(self):
         self.assertTrue(issubclass(MirrorCellACC, MirrorCell))

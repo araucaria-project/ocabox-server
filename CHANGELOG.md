@@ -3,6 +3,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.11.0]
+### Added
+- `driver` in the component configuration: `kind` says what a component is, `driver` how TIC talks to it (the
+  vendor mechanism). TIC chooses the class by the pair; without a driver, the standard class of the kind (or an
+  inert optical element). Only TIC reads `driver`; everything above it sees generic kinds. Drivers today:
+  `tertiary` / `covercalibrator` / `flatscreen` + `asa-autoslew` (AutoSlew actions on the mount), `mirrorcell` +
+  `asa-acc` (actions on the ACC focuser). An unknown driver skips that component with an ERROR.
+- Flat screen lamp: `FlatScreen` contract and `FlatScreenAutoslew` (`kind: flatscreen, driver: asa-autoslew`,
+  option `lamp_level`, default 5). PUT `lampon` / `lampoff`; GET `commanded` = the last command TIC sent,
+  `{lamp: on|off|null, at: ISO UTC|null}` (null since TIC started). GET `lamp` is 3002: AutoSlew cannot read the
+  mount's fan output the lamp hangs on. A command is not a reading.
+### Changed
+- `telescope.domeflatlampon` / `domeflatlampoff` are deprecated; with a flat screen device they switch through it,
+  so it remembers the command whoever sends it.
+### Deprecated
+- Vendor kinds `tertiaryOCA`, `mirrorcellACC`, `covercalibratorOCA`: they still build, with a warning naming the
+  `kind` + `driver` to configure instead. The ALPACA device scan no longer probes them as device types.
+
 ## [2.10.1]
 ### Changed
 - Requires serverish >= 2.2.1, checked by the import guard: with 2.0.x `TreeNatsService` subscribes to the service's status but never receives it, so every GET is 4005 (found running the TIC ↔ NATS ↔ optics chain).

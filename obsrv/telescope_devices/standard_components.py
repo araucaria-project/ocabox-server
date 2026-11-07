@@ -16,3 +16,4 @@ class StandardTelescopeComponents:
     COVERCALIBRATOR = "covercalibrator"
     TERTIARY = "tertiary"
     MIRRORCELL = "mirrorcell"
+    FLATSCREEN = "flatscreen"

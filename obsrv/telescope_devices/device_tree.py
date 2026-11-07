@@ -3,7 +3,7 @@ import json
 import logging
 import math
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional, Union, List, MutableMapping, Dict, Coroutine, Callable
 
 from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
@@ -50,7 +50,7 @@ class Component:
             try:
                 if not isinstance(op, dict) or 'kind' not in op:
                     raise ComponentConfigError(f"{sys_id}: component has no 'kind'")
-                child = self._create_component(kind=op['kind'], sys_id=sys_id, parent=self)
+                child = self._create_component(kind=op['kind'], sys_id=sys_id, parent=self, driver=op.get('driver'))
                 child._setup(op)
             except Exception:
                 logger.exception(f"Component {sys_id} skipped: it could not be built from the configuration")
@@ -119,9 +119,21 @@ class Component:
             return self
 
     @classmethod
-    def _create_component(cls, kind: str, sys_id: str, parent: 'Component') -> 'Component':
-        """A TIC device class when one exists for ``kind``; otherwise an :class:`OpticalElement` when the
-        optical-path model knows the kind; otherwise the configuration is wrong."""
+    def _create_component(cls, kind: str, sys_id: str, parent: 'Component',
+                          driver: Optional[str] = None) -> 'Component':
+        """``kind`` says what the component is, ``driver`` how TIC talks to it. With a ``driver``, the class
+        registered for that pair; without one, the TIC device class of ``kind`` when one exists, otherwise an
+        :class:`OpticalElement` when the optical-path model knows the kind; otherwise the configuration is wrong.
+        A vendor kind from before ``driver`` (``tertiaryOCA``) still builds, with a deprecation warning."""
+        if kind in _vendor_kinds:
+            generic, vendor_driver = _vendor_kinds[kind]
+            logger.warning(f"{sys_id}: kind {kind!r} is deprecated, configure kind: {generic}, driver: {vendor_driver}")
+            kind, driver = generic, driver or vendor_driver
+        if driver is not None:
+            driver_class = _driver_classes.get((kind, driver))
+            if driver_class is None:
+                raise ComponentConfigError(f"{sys_id}: no driver {driver!r} for kind {kind!r}")
+            return driver_class(sys_id=sys_id, parent=parent)
         device_class = _component_classes.get(kind)
         if device_class is not None:
             return device_class(sys_id=sys_id, parent=parent)
@@ -438,10 +450,25 @@ class Telescope(Device):
         return await self._put("action", Action="telescope:motoroff", Parameters="")
 
     async def domeflatlampon_put(self, **kwargs):
+        """Deprecated: the flat screen's ``lampon``, for clients from before the flat screen device. Switches
+        through that device when the telescope has one, so it remembers the command."""
+        screen = self._flat_screen()
+        if screen is not None:
+            return await screen.lampon_put()
         return await self._put("action", Action="telescope:startfans", Parameters="5")  # lamp is connected under fans
 
     async def domeflatlampoff_put(self, **kwargs):
+        """Deprecated: the flat screen's ``lampoff``; see :meth:`domeflatlampon_put`."""
+        screen = self._flat_screen()
+        if screen is not None:
+            return await screen.lampoff_put()
         return await self._put("action", Action="telescope:stopfans", Parameters="")  # lamp is connected under fans
+
+    def _flat_screen(self) -> Optional['FlatScreen']:
+        """The flat screen device of this telescope, when the configuration gives it a driver."""
+        if self.parent is None:
+            return None
+        return next((c for c in self.parent.children.values() if isinstance(c, FlatScreen)), None)
 
     async def motorstatus(self, **kwargs):
         return await self._put("commandstring", Command="MotStat", Raw="True")
@@ -516,6 +543,83 @@ class CoverCalibratorOCA(CoverCalibrator):
         return await self._put("action", kind=Telescope.KIND, Action='telescope:opencover', Parameters='')
 
 
+class FlatScreen(Device):
+    """Flat screen (dome flat) lamp — interface contract.
+
+    The lamp's vocabulary is ``on`` / ``off``, the same values as the lamp axis of the optical path model.
+    Attributes (GET): ``lamp`` — the reading; ``commanded`` — the last ``lampon`` / ``lampoff`` this TIC sent,
+    ``{'lamp': 'on' | 'off' | None, 'at': ISO UTC | None}`` (``None`` since TIC started). A command is not a
+    reading: clients that need proof (the optics graph) must not take ``commanded`` for one.
+    Attributes (PUT): ``lampon``, ``lampoff``.
+
+    Every method raises ``3002``: a flat screen has a device only through a ``driver``
+    (``FlatScreenAutoslew``); without one the configuration's ``flatscreen`` is an :class:`OpticalElement`.
+    """
+    KIND = StandardTelescopeComponents.FLATSCREEN
+
+    def _not_implemented(self, method: str, why: str = "use a flat screen driver (e.g. 'asa-autoslew')"):
+        raise TreeStructureError(
+            code=3002,
+            message=f"Method {method!r} is not implemented on {type(self).__name__} ({self.sys_id}); {why}",
+            severity=TreeStructureError.SEVERITY_CRITICAL,
+        )
+
+    async def lamp(self, **kwargs):
+        """Whether the lamp is lit, read from the device: ``'on'`` / ``'off'``."""
+        self._not_implemented('lamp')
+
+    async def commanded(self, **kwargs):
+        """The last switching command TIC sent: ``{'lamp': 'on' | 'off' | None, 'at': ISO UTC | None}``."""
+        self._not_implemented('commanded')
+
+    async def lampon_put(self, **kwargs):
+        """Switch the lamp on."""
+        self._not_implemented('lampon')
+
+    async def lampoff_put(self, **kwargs):
+        """Switch the lamp off."""
+        self._not_implemented('lampoff')
+
+
+class FlatScreenAutoslew(FlatScreen):
+    """ASA (driver ``asa-autoslew``): the flat screen lamp hangs on the mount's fan output, switched by the
+    AutoSlew vendor actions ``telescope:startfans <level>`` / ``telescope:stopfans`` on the telescope ALPACA
+    device (option ``lamp_level``, default 5).
+
+    AutoSlew cannot read that output (checked on jk15 2026-11-06; the mirror-fan and dome-fan readbacks are
+    other outputs; ASA asked for a getter), so ``lamp`` stays 3002 and TIC remembers the last command it sent in
+    ``commanded`` — lost on a TIC restart, blind to a switch made outside TIC."""
+    DEFAULT_LEVEL = 5
+
+    def __init__(self, sys_id: str, parent: Union['Component', None]) -> None:
+        super().__init__(sys_id=sys_id, parent=parent)
+        self._commanded = {'lamp': None, 'at': None}
+
+    @property
+    def lamp_level(self) -> int:
+        return int(self.component_options.get('lamp_level', self.DEFAULT_LEVEL))
+
+    async def lamp(self, **kwargs):
+        self._not_implemented('lamp', why="AutoSlew cannot read the mount's fan output; see 'commanded'")
+
+    async def commanded(self, **kwargs):
+        return dict(self._commanded)
+
+    async def lampon_put(self, **kwargs):
+        ret = await self._put("action", kind=Telescope.KIND, Action='telescope:startfans', Parameters=str(self.lamp_level))
+        self._remember('on')
+        return ret
+
+    async def lampoff_put(self, **kwargs):
+        ret = await self._put("action", kind=Telescope.KIND, Action='telescope:stopfans', Parameters='')
+        self._remember('off')
+        return ret
+
+    def _remember(self, lamp: str) -> None:
+        """Only a command AutoSlew accepted is remembered: a failed PUT raised before this."""
+        self._commanded = {'lamp': lamp, 'at': datetime.now(UTC).isoformat(timespec='seconds')}
+
+
 class Tertiary(Device):
     """Tertiary (M3) mirror device — interface contract.
 
@@ -539,7 +643,7 @@ class Tertiary(Device):
         raise TreeStructureError(
             code=3002,
             message=f"Method {method!r} is not implemented on {type(self).__name__} "
-                    f"({self.sys_id}); use a vendor-specific tertiary kind (e.g. 'tertiaryOCA')",
+                    f"({self.sys_id}); configure a driver (e.g. driver: asa-autoslew)",
             severity=TreeStructureError.SEVERITY_CRITICAL,
         )
 
@@ -736,7 +840,7 @@ class MirrorCell(Device):
         raise TreeStructureError(
             code=3002,
             message=f"Method {method!r} is not implemented on {type(self).__name__} "
-                    f"({self.sys_id}); use a vendor-specific mirror-cell kind (e.g. 'mirrorcellACC')",
+                    f"({self.sys_id}); configure a driver (e.g. driver: asa-acc)",
             severity=TreeStructureError.SEVERITY_CRITICAL,
         )
 
@@ -1121,9 +1225,21 @@ _component_classes = {
     Switch.KIND: Switch,
     SafetyMonitor.KIND: SafetyMonitor,
     CoverCalibrator.KIND: CoverCalibrator,
-    Tertiary.KIND: Tertiary,  # here is a custom key, normally shou by Tertiary but its specific kind only for OCA!
-    "tertiaryOCA": TertiaryOCA,  # here is a custom key !
-    'covercalibratorOCA': CoverCalibratorOCA,  # here is a custom key !
-    MirrorCell.KIND: MirrorCell,  # interface contract only — raises 3002; use a vendor kind below
-    'mirrorcellACC': MirrorCellACC,  # ASA ACC mirror cell (actions on the ACC focuser)
+    Tertiary.KIND: Tertiary,  # interface contract only — raises 3002; needs a driver
+    MirrorCell.KIND: MirrorCell,  # interface contract only — raises 3002; needs a driver
+}
+
+#: (kind, driver) → the class through which TIC talks to that component; the driver names the vendor mechanism
+_driver_classes = {
+    (StandardTelescopeComponents.TERTIARY, 'asa-autoslew'): TertiaryOCA,  # AutoSlew actions on the mount
+    (StandardTelescopeComponents.COVERCALIBRATOR, 'asa-autoslew'): CoverCalibratorOCA,  # covers via the mount
+    (StandardTelescopeComponents.MIRRORCELL, 'asa-acc'): MirrorCellACC,  # actions on the ACC focuser
+    (StandardTelescopeComponents.FLATSCREEN, 'asa-autoslew'): FlatScreenAutoslew,  # lamp on the mount's fans
+}
+
+#: vendor kinds from before ``driver`` (2026-11-06) → (kind, driver); deprecated, build with a warning
+_vendor_kinds = {
+    'tertiaryOCA': (StandardTelescopeComponents.TERTIARY, 'asa-autoslew'),
+    'covercalibratorOCA': (StandardTelescopeComponents.COVERCALIBRATOR, 'asa-autoslew'),
+    'mirrorcellACC': (StandardTelescopeComponents.MIRRORCELL, 'asa-acc'),
 }
