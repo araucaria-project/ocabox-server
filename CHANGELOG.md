@@ -10,16 +10,25 @@ All notable changes to this project will be documented in this file.
   inert optical element). Only TIC reads `driver`; everything above it sees generic kinds. Drivers today:
   `tertiary` / `covercalibrator` / `flatscreen` + `asa-autoslew` (AutoSlew actions on the mount), `mirrorcell` +
   `asa-acc` (actions on the ACC focuser). An unknown driver skips that component with an ERROR.
+- Drivers live apart from the generic tree: `obsrv/telescope_devices/drivers/`, one module per driver
+  (`asa_autoslew.py`, `asa_acc.py`), each class registering itself with `@driver(kind, name)`
+  (`driver_registry.py`). `device_tree.py` keeps only the generic kinds and their contracts.
 - Flat screen lamp: `FlatScreen` contract and `FlatScreenAutoslew` (`kind: flatscreen, driver: asa-autoslew`,
   option `lamp_level`, default 5). PUT `lampon` / `lampoff`; GET `commanded` = the last command TIC sent,
   `{lamp: on|off|null, at: ISO UTC|null}` (null since TIC started). GET `lamp` is 3002: AutoSlew cannot read the
   mount's fan output the lamp hangs on. A command is not a reading.
 ### Changed
-- `telescope.domeflatlampon` / `domeflatlampoff` are deprecated; with a flat screen device they switch through it,
-  so it remembers the command whoever sends it.
+- `telescope.domeflatlampon` / `domeflatlampoff` are deprecated and switch through the flat screen device, so it
+  remembers the command whoever sends it; without one (a `flatscreen` with a `driver`) they are 3002 — the mount
+  no longer carries the AutoSlew lamp action itself.
+- Vendor classes renamed `<Kind><Driver>` and moved to `obsrv.telescope_devices.drivers`: `TertiaryOCA` →
+  `asa_autoslew.TertiaryAutoslew`, `CoverCalibratorOCA` → `asa_autoslew.CoverCalibratorAutoslew`,
+  `MirrorCellACC` → `asa_acc.MirrorCellACC`.
+- The ALPACA device scan probes its own list of ASCOM device types (`ASCOM_DEVICE_TYPES`) instead of the tree's
+  kinds, so it no longer probes tertiary or mirror cell as ALPACA devices.
 ### Deprecated
 - Vendor kinds `tertiaryOCA`, `mirrorcellACC`, `covercalibratorOCA`: they still build, with a warning naming the
-  `kind` + `driver` to configure instead. The ALPACA device scan no longer probes them as device types.
+  `kind` + `driver` to configure instead.
 
 ## [2.10.1]
 ### Changed

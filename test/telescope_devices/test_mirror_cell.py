@@ -36,7 +36,8 @@ from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
 from obcom.data_colection.response_error import ResponseError
 from obcom.data_colection.value import TreeValueError
 
-from obsrv.telescope_devices.device_tree import Focuser, MirrorCell, MirrorCellACC
+from obsrv.telescope_devices.device_tree import Focuser, MirrorCell
+from obsrv.telescope_devices.drivers.asa_acc import MirrorCellACC
 
 
 def _motor(index, position, status_value, status_text):

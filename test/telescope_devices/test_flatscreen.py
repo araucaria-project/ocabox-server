@@ -14,9 +14,10 @@ from unittest.mock import AsyncMock, MagicMock
 from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
 from obcom.data_colection.response_error import ResponseError
 
-from obsrv.telescope_devices.device_tree import (
-    Component, ComponentConfigError, CoverCalibratorOCA, FlatScreen, FlatScreenAutoslew, OpticalElement,
-    Telescope, TertiaryOCA,
+from obsrv.telescope_devices.device_tree import Component, ComponentConfigError, FlatScreen, OpticalElement, Telescope
+from obsrv.telescope_devices.driver_registry import driver
+from obsrv.telescope_devices.drivers.asa_autoslew import (
+    CoverCalibratorAutoslew, FlatScreenAutoslew, TertiaryAutoslew,
 )
 
 
@@ -103,8 +104,8 @@ class DriverTreeTest(unittest.IsolatedAsyncioTestCase):
             'covercalibrator': {'kind': 'covercalibrator', 'driver': 'asa-autoslew'},
         })
         self.assertIsInstance(root.children['flatscreen'], FlatScreenAutoslew)
-        self.assertIsInstance(root.children['tertiary'], TertiaryOCA)
-        self.assertIsInstance(root.children['covercalibrator'], CoverCalibratorOCA)
+        self.assertIsInstance(root.children['tertiary'], TertiaryAutoslew)
+        self.assertIsInstance(root.children['covercalibrator'], CoverCalibratorAutoslew)
 
     def test_flat_screen_without_driver_stays_an_optical_element(self):
         self.assertIsInstance(_build({'flatscreen': {'kind': 'flatscreen'}}).children['flatscreen'], OpticalElement)
@@ -123,8 +124,8 @@ class DriverTreeTest(unittest.IsolatedAsyncioTestCase):
     def test_vendor_kinds_still_build_with_a_deprecation_warning(self):
         with self.assertLogs('device_tree', level='WARNING') as logs:
             root = _build({'tertiary': {'kind': 'tertiaryOCA'}, 'covers': {'kind': 'covercalibratorOCA'}})
-        self.assertIsInstance(root.children['tertiary'], TertiaryOCA)
-        self.assertIsInstance(root.children['covers'], CoverCalibratorOCA)
+        self.assertIsInstance(root.children['tertiary'], TertiaryAutoslew)
+        self.assertIsInstance(root.children['covers'], CoverCalibratorAutoslew)
         self.assertTrue(any('driver: asa-autoslew' in line for line in logs.output))
 
     async def test_mount_flat_lamp_commands_go_through_the_flat_screen(self):
@@ -137,11 +138,20 @@ class DriverTreeTest(unittest.IsolatedAsyncioTestCase):
         await root.children['mount'].domeflatlampoff_put()
         self.assertEqual((await root.children['flatscreen'].commanded())['lamp'], 'off')
 
-    async def test_mount_flat_lamp_without_flat_screen_device_switches_directly(self):
+    async def test_mount_flat_lamp_without_flat_screen_device_is_3002(self):
         root = _build({'mount': {'kind': 'telescope'}, 'flatscreen': {'kind': 'flatscreen'}})
-        mount = root.children['mount']
-        await mount.domeflatlampon_put()
-        root._connector.put.assert_awaited_with(mount, 'action', kind=None, Action='telescope:startfans', Parameters='5')
+        with self.assertRaises(TreeStructureError) as raised:
+            await root.children['mount'].domeflatlampon_put()
+        self.assertEqual(raised.exception.code, 3002)
+        self.assertIn('driver', raised.exception.message)
+        root._connector.put.assert_not_awaited()
+
+
+class DriverRegistryTest(unittest.TestCase):
+
+    def test_a_driver_registers_once(self):
+        with self.assertRaises(RuntimeError):
+            driver('flatscreen', 'asa-autoslew')(type('Again', (FlatScreen,), {}))
 
 
 if __name__ == '__main__':

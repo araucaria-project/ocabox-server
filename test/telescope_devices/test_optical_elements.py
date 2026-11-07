@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, MagicMock
 from obcom.data_colection.coded_error import TreeStructureError
 from obcom.data_colection.response_error import ResponseError
 
-from obsrv.telescope_devices.device_tree import Camera, Component, Dome, OpticalElement, TertiaryOCA
+from obsrv.telescope_devices.device_tree import Camera, Component, Dome, OpticalElement
+from obsrv.telescope_devices.drivers.asa_autoslew import TertiaryAutoslew
 
 JK15_LIKE = {
     'components': {
@@ -45,7 +46,7 @@ class OpticalElementTreeTest(unittest.IsolatedAsyncioTestCase):
     def test_device_kinds_stay_devices_and_optical_kinds_become_elements(self):
         root = _build(JK15_LIKE)
         self.assertIsInstance(root.children['dome'], Dome)
-        self.assertIsInstance(root.children['tertiary'], TertiaryOCA)
+        self.assertIsInstance(root.children['tertiary'], TertiaryAutoslew)
         self.assertIsInstance(root.children['camera'], Camera)
         for name in ('sky', 'flatscreen', 'pickoff', 'thar_lamp', 'm4'):
             with self.subTest(component=name):
