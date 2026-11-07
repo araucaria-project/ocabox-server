@@ -26,6 +26,13 @@ All notable changes to this project will be documented in this file.
   `MirrorCellACC` → `asa_acc.MirrorCellACC`.
 - The ALPACA device scan probes its own list of ASCOM device types (`ASCOM_DEVICE_TYPES`) instead of the tree's
   kinds, so it no longer probes tertiary or mirror cell as ALPACA devices.
+### Fixed
+- A `TreeStructureError` with an explicit code (3002: the device does not implement the method, e.g. the tertiary
+  and mirror cell contracts, the unreadable flat screen lamp) reached the client as a bare 3001 without its
+  message: `get_response` took every `TreeStructureError` for the routing signal. Only the bare one (3000, "not
+  mine") routes on to the subcontractor now; a coded one is the answer.
+- `Observatory.add_component` forwards `driver`.
+- Flat screen switching is serialised, so `commanded` follows the order of the commands, not of their replies.
 ### Deprecated
 - Vendor kinds `tertiaryOCA`, `mirrorcellACC`, `covercalibratorOCA`: they still build, with a warning naming the
   `kind` + `driver` to configure instead.

@@ -7,14 +7,19 @@ sent in ``commanded``. A flat screen without a driver stays an inert :class:`Opt
 from before ``driver`` (``tertiaryOCA``, ``mirrorcellACC``, ``covercalibratorOCA``) still build, with a
 deprecation warning.
 """
+import asyncio
+import time
 import unittest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock
 
 from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
 from obcom.data_colection.response_error import ResponseError
+from obcom.data_colection.value_call import ValueRequest
 
-from obsrv.telescope_devices.device_tree import Component, ComponentConfigError, FlatScreen, OpticalElement, Telescope
+from obsrv.telescope_devices.device_tree import (
+    Component, ComponentConfigError, FlatScreen, Observatory, OpticalElement, Telescope,
+)
 from obsrv.telescope_devices.driver_registry import driver
 from obsrv.telescope_devices.drivers.asa_autoslew import (
     CoverCalibratorAutoslew, FlatScreenAutoslew, TertiaryAutoslew,
@@ -89,6 +94,25 @@ class FlatScreenAutoslewTest(unittest.IsolatedAsyncioTestCase):
             await device.lampoff_put()
         self.assertEqual((await device.commanded())['lamp'], 'on')
 
+    async def test_commanded_follows_the_command_order_not_the_reply_order(self):
+        device = _device(FlatScreenAutoslew)
+        released = asyncio.Event()
+
+        async def put(*args, Action, **kwargs):
+            if Action == 'telescope:startfans':
+                await released.wait()  # the ON reply is late
+            return ''
+
+        device._connector.put.side_effect = put
+        on = asyncio.create_task(device.lampon_put())
+        off = asyncio.create_task(device.lampoff_put())
+        await asyncio.sleep(0)
+        released.set()
+        await asyncio.gather(on, off)
+        self.assertEqual([c.kwargs['Action'] for c in device._connector.put.await_args_list],
+                         ['telescope:startfans', 'telescope:stopfans'])
+        self.assertEqual((await device.commanded())['lamp'], 'off')
+
     async def test_commanded_is_a_copy(self):
         device = _device(FlatScreenAutoslew)
         (await device.commanded())['lamp'] = 'on'
@@ -106,6 +130,12 @@ class DriverTreeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(root.children['flatscreen'], FlatScreenAutoslew)
         self.assertIsInstance(root.children['tertiary'], TertiaryAutoslew)
         self.assertIsInstance(root.children['covercalibrator'], CoverCalibratorAutoslew)
+
+    def test_add_component_takes_the_driver(self):
+        observatory = Observatory()
+        observatory._connector = MagicMock(get=AsyncMock(), put=AsyncMock(return_value=''))
+        screen = observatory.add_component('flatscreen', 'flatscreen', driver='asa-autoslew')
+        self.assertIsInstance(screen, FlatScreenAutoslew)
 
     def test_flat_screen_without_driver_stays_an_optical_element(self):
         self.assertIsInstance(_build({'flatscreen': {'kind': 'flatscreen'}}).children['flatscreen'], OpticalElement)
@@ -145,6 +175,32 @@ class DriverTreeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(raised.exception.code, 3002)
         self.assertIn('driver', raised.exception.message)
         root._connector.put.assert_not_awaited()
+
+
+class ThroughTheTreeTest(unittest.IsolatedAsyncioTestCase):
+    """A client sees the device's 3002 with its reason, not a routing 3001 (TreeStructureError with a code answers
+    the request; only the bare one routes on)."""
+
+    async def _request(self, components: dict, address: str, request_type: str = 'GET'):
+        from obsrv.tree_components.specialized_components.tree_alpaca import TreeAlpacaObservatory
+        with self.assertLogs('tree_alpaca', level='WARNING'):  # no 'tree.flat_test' in the configuration
+            tree = TreeAlpacaObservatory('flat_test')
+        tree._observatory = _build(components)
+        request = ValueRequest(f'flat_test.{address}', request_timeout=time.time() + 5, request_type=request_type)
+        request.index = 1
+        return await tree.get_response(request)
+
+    async def test_unreadable_lamp_is_3002_with_its_reason(self):
+        response = await self._request({'flatscreen': {'kind': 'flatscreen', 'driver': 'asa-autoslew'}},
+                                   'flatscreen.lamp')
+        self.assertFalse(response.status)
+        self.assertEqual(response.error.code, 3002)
+        self.assertIn("see 'commanded'", response.error.message)
+
+    async def test_mount_lamp_without_flat_screen_device_is_3002_with_its_reason(self):
+        response = await self._request({'mount': {'kind': 'telescope'}}, 'mount.domeflatlampon', 'PUT')
+        self.assertEqual(response.error.code, 3002)
+        self.assertIn('flat screen device', response.error.message)
 
 
 class DriverRegistryTest(unittest.TestCase):

@@ -228,7 +228,7 @@ class Observatory(Component):
         Returns:
             The created component
         """
-        component = self._create_component(kind=kind, sys_id=sys_id, parent=self)
+        component = self._create_component(kind=kind, sys_id=sys_id, parent=self, driver=config.get('driver'))
         component._setup(config)
         self.children[sys_id] = component
         setattr(self, sys_id, component)  # Allow direct access like obs.telescope

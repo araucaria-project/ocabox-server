@@ -3,6 +3,7 @@ device also drive the covers, the tertiary (M3) and the mount's fan output, on w
 
 The actions and their quirks: vault ``Domain/Instruments/ASA Autoslew Alpaca Actions``.
 """
+import asyncio
 import json
 from datetime import UTC, datetime
 from typing import Optional
@@ -37,12 +38,14 @@ class FlatScreenAutoslew(FlatScreen):
 
     AutoSlew cannot read that output (checked on jk15 2026-11-06; the mirror-fan and dome-fan readbacks are
     other outputs; ASA asked for a getter), so ``lamp`` stays 3002 and TIC remembers the last command it sent in
-    ``commanded`` — lost on a TIC restart, blind to a switch made outside TIC."""
+    ``commanded`` — lost on a TIC restart, blind to a switch made outside TIC. Switching is serialised, so
+    ``commanded`` follows the order the commands reached AutoSlew, not the order their replies came back."""
     DEFAULT_LEVEL = 5
 
     def __init__(self, sys_id: str, parent: Optional[Component]) -> None:
         super().__init__(sys_id=sys_id, parent=parent)
         self._commanded = {'lamp': None, 'at': None}
+        self._switching = asyncio.Lock()
 
     @property
     def lamp_level(self) -> int:
@@ -55,14 +58,16 @@ class FlatScreenAutoslew(FlatScreen):
         return dict(self._commanded)
 
     async def lampon_put(self, **kwargs):
-        ret = await self._put("action", kind=Telescope.KIND, Action='telescope:startfans', Parameters=str(self.lamp_level))
-        self._remember('on')
-        return ret
+        return await self._switch('on', Action='telescope:startfans', Parameters=str(self.lamp_level))
 
     async def lampoff_put(self, **kwargs):
-        ret = await self._put("action", kind=Telescope.KIND, Action='telescope:stopfans', Parameters='')
-        self._remember('off')
-        return ret
+        return await self._switch('off', Action='telescope:stopfans', Parameters='')
+
+    async def _switch(self, lamp: str, **action):
+        async with self._switching:
+            ret = await self._put("action", kind=Telescope.KIND, **action)
+            self._remember(lamp)
+            return ret
 
     def _remember(self, lamp: str) -> None:
         """Only a command AutoSlew accepted is remembered: a failed PUT raised before this."""
