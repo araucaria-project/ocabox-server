@@ -16,6 +16,11 @@ from obsrv.protocols.alpaca.alpaca_exceptions import AlpacaError, AlpacaHttpErro
 logger = logging.getLogger(__name__.rsplit('.')[-1])
 
 
+#: ALPACA device types the server scan probes (``/<type>/<n>/description`` etc.): the ASCOM interfaces TIC
+#: drives. Not the tree's kinds — tertiary, mirror cell and flat screen have no ALPACA device of their own.
+ASCOM_DEVICE_TYPES = ('telescope', 'dome', 'camera', 'filterwheel', 'focuser', 'rotator', 'switch',
+                      'safetymonitor', 'covercalibrator')
+
 # Vendor SDK error codes that map to TreeOtherError(4008) "device busy".
 # 20072 = Andor DRV_ACQUIRING (acquisition in progress).
 _DEVICE_BUSY_ERRNOS = frozenset({20072})
@@ -191,8 +196,7 @@ class AlpacaConnector(Connector):
             'driverversion',
             'interfaceversion',
         ]
-        from obsrv.telescope_devices.device_tree import _component_classes
-        alpaca_devices = _component_classes.keys()
+        alpaca_devices = ASCOM_DEVICE_TYPES
         devices = []
 
         for device in alpaca_devices:

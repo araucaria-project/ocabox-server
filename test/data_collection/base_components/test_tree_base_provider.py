@@ -1,6 +1,7 @@
 import asyncio
 import unittest
 from obcom.data_colection.address import AddressError
+from obcom.data_colection.coded_error import TreeStructureError
 from obsrv.tree_components.base_components.tree_base_provider import TreeBaseProvider
 from obcom.data_colection.response_error import ResponseError
 from obcom.data_colection.value import Value, TreeValueError
@@ -50,6 +51,23 @@ class TreeBaseProviderTest(unittest.TestCase):
         self.assertEqual(response.value, None)
         self.assertFalse(response.status)
         self.assertEqual(response.error.code, 3001)
+
+    def test_get_response_explicit_structure_error_answers(self):
+        """A TreeStructureError with a code (3002: not implemented) is the answer; it does not route on to the
+        subcontractor, and the client gets its code and message."""
+
+        class NotImplementedHere(TreeBaseProvider):
+            async def get_value(self, request, **kwargs):
+                raise TreeStructureError(code=3002, message='no readback', severity=ResponseError.SEVERITY_CRITICAL)
+
+        tbp = NotImplementedHere('component_sample_name', self.vp1)
+        request = ValueRequest('.'.join([self.sample_address_prefix, self.vp1.get_source_name(), self.v1[0]]),
+                               self.v1[1].ts, 20)
+        request.index = self.start_index  # set manually index
+        response = asyncio.run(tbp.get_response(request))
+        self.assertFalse(response.status)
+        self.assertEqual((response.error.code, response.error.message), (3002, 'no readback'))
+        self.assertEqual(self.vp1.nr_requests, 0)
 
     def test_get_response_address_error(self):
         """

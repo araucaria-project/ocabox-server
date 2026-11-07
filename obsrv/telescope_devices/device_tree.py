@@ -1,17 +1,15 @@
 import functools
-import json
 import logging
-import math
 import re
 from datetime import datetime
 from typing import Optional, Union, List, MutableMapping, Dict, Coroutine, Callable
 
-from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
-from obcom.data_colection.value import TreeValueError
+from obcom.data_colection.coded_error import TreeStructureError
 from obcom.optics import DEFAULT_REGISTRY as OPTICAL_KINDS
 
 from obsrv.protocols import create_connector
 from obsrv.utils.coordinates import check_equatorial_coordinates, check_horizontal_coordinates
+from obsrv.telescope_devices.driver_registry import driver_class, resolve_deprecated_kind
 from obsrv.telescope_devices.standard_components import StandardTelescopeComponents
 from obsrv.ob_config import SingletonConfig
 
@@ -50,7 +48,7 @@ class Component:
             try:
                 if not isinstance(op, dict) or 'kind' not in op:
                     raise ComponentConfigError(f"{sys_id}: component has no 'kind'")
-                child = self._create_component(kind=op['kind'], sys_id=sys_id, parent=self)
+                child = self._create_component(kind=op['kind'], sys_id=sys_id, parent=self, driver=op.get('driver'))
                 child._setup(op)
             except Exception:
                 logger.exception(f"Component {sys_id} skipped: it could not be built from the configuration")
@@ -119,9 +117,23 @@ class Component:
             return self
 
     @classmethod
-    def _create_component(cls, kind: str, sys_id: str, parent: 'Component') -> 'Component':
-        """A TIC device class when one exists for ``kind``; otherwise an :class:`OpticalElement` when the
-        optical-path model knows the kind; otherwise the configuration is wrong."""
+    def _create_component(cls, kind: str, sys_id: str, parent: 'Component',
+                          driver: Optional[str] = None) -> 'Component':
+        """``kind`` says what the component is, ``driver`` how TIC talks to it. With a ``driver``, the class
+        registered for that pair (:mod:`obsrv.telescope_devices.driver_registry`); without one, the TIC device
+        class of ``kind`` when one exists, otherwise an :class:`OpticalElement` when the optical-path model knows
+        the kind; otherwise the configuration is wrong. A vendor kind from before ``driver`` (``tertiaryOCA``)
+        still builds, with a deprecation warning."""
+        deprecated = resolve_deprecated_kind(kind)
+        if deprecated is not None:
+            generic, vendor_driver = deprecated
+            logger.warning(f"{sys_id}: kind {kind!r} is deprecated, configure kind: {generic}, driver: {vendor_driver}")
+            kind, driver = generic, driver or vendor_driver
+        if driver is not None:
+            device_class = driver_class(kind, driver)
+            if device_class is None:
+                raise ComponentConfigError(f"{sys_id}: no driver {driver!r} for kind {kind!r}")
+            return device_class(sys_id=sys_id, parent=parent)
         device_class = _component_classes.get(kind)
         if device_class is not None:
             return device_class(sys_id=sys_id, parent=parent)
@@ -216,7 +228,7 @@ class Observatory(Component):
         Returns:
             The created component
         """
-        component = self._create_component(kind=kind, sys_id=sys_id, parent=self)
+        component = self._create_component(kind=kind, sys_id=sys_id, parent=self, driver=config.get('driver'))
         component._setup(config)
         self.children[sys_id] = component
         setattr(self, sys_id, component)  # Allow direct access like obs.telescope
@@ -438,10 +450,27 @@ class Telescope(Device):
         return await self._put("action", Action="telescope:motoroff", Parameters="")
 
     async def domeflatlampon_put(self, **kwargs):
-        return await self._put("action", Action="telescope:startfans", Parameters="5")  # lamp is connected under fans
+        """Deprecated: the flat screen's ``lampon``, for clients from before the flat screen device. Switches
+        through that device, so it remembers the command."""
+        return await self._flat_screen('domeflatlampon').lampon_put()
 
     async def domeflatlampoff_put(self, **kwargs):
-        return await self._put("action", Action="telescope:stopfans", Parameters="")  # lamp is connected under fans
+        """Deprecated: the flat screen's ``lampoff``; see :meth:`domeflatlampon_put`."""
+        return await self._flat_screen('domeflatlampoff').lampoff_put()
+
+    def _flat_screen(self, method: str) -> 'FlatScreen':
+        """The flat screen device of this telescope; 3002 when the configuration gives it none (a ``flatscreen``
+        with a ``driver``)."""
+        siblings = self.parent.children.values() if self.parent is not None else ()
+        screen = next((c for c in siblings if isinstance(c, FlatScreen)), None)
+        if screen is None:
+            raise TreeStructureError(
+                code=3002,
+                message=f"Method {method!r} on {self.sys_id} needs a flat screen device: "
+                        f"configure 'flatscreen' with a driver (e.g. driver: asa-autoslew)",
+                severity=TreeStructureError.SEVERITY_CRITICAL,
+            )
+        return screen
 
     async def motorstatus(self, **kwargs):
         return await self._put("commandstring", Command="MotStat", Raw="True")
@@ -506,21 +535,49 @@ class Rotator(Device):
     KIND = StandardTelescopeComponents.ROTATOR
 
 
-class CoverCalibratorOCA(CoverCalibrator):
-    """CoverCalibrator OCA specific methods."""
+class FlatScreen(Device):
+    """Flat screen (dome flat) lamp — interface contract.
 
-    async def closecover_put(self, **kwargs):
-        return await self._put("action", kind=Telescope.KIND, Action='telescope:closecover', Parameters='')
+    The lamp's vocabulary is ``on`` / ``off``, the same values as the lamp axis of the optical path model.
+    Attributes (GET): ``lamp`` — the reading; ``commanded`` — the last ``lampon`` / ``lampoff`` this TIC sent,
+    ``{'lamp': 'on' | 'off' | None, 'at': ISO UTC | None}`` (``None`` since TIC started). A command is not a
+    reading: clients that need proof (the optics graph) must not take ``commanded`` for one.
+    Attributes (PUT): ``lampon``, ``lampoff``.
 
-    async def opencover_put(self, **kwargs):
-        return await self._put("action", kind=Telescope.KIND, Action='telescope:opencover', Parameters='')
+    Every method raises ``3002``: a flat screen has a device only through a ``driver`` (see
+    :mod:`obsrv.telescope_devices.drivers`); without one the configuration's ``flatscreen`` is an :class:`OpticalElement`.
+    """
+    KIND = StandardTelescopeComponents.FLATSCREEN
+
+    def _not_implemented(self, method: str, why: str = "use a flat screen driver (e.g. 'asa-autoslew')"):
+        raise TreeStructureError(
+            code=3002,
+            message=f"Method {method!r} is not implemented on {type(self).__name__} ({self.sys_id}); {why}",
+            severity=TreeStructureError.SEVERITY_CRITICAL,
+        )
+
+    async def lamp(self, **kwargs):
+        """Whether the lamp is lit, read from the device: ``'on'`` / ``'off'``."""
+        self._not_implemented('lamp')
+
+    async def commanded(self, **kwargs):
+        """The last switching command TIC sent: ``{'lamp': 'on' | 'off' | None, 'at': ISO UTC | None}``."""
+        self._not_implemented('commanded')
+
+    async def lampon_put(self, **kwargs):
+        """Switch the lamp on."""
+        self._not_implemented('lampon')
+
+    async def lampoff_put(self, **kwargs):
+        """Switch the lamp off."""
+        self._not_implemented('lampoff')
 
 
 class Tertiary(Device):
     """Tertiary (M3) mirror device — interface contract.
 
     ALPACA has no tertiary device type, so every implementation is
-    vendor-specific (see ``TertiaryOCA`` for ASA AutoSlew). The base class
+    vendor-specific (drivers in :mod:`obsrv.telescope_devices.drivers`). The base class
     declares the interface; each method raises ``3002`` so that a tree
     configured with a plain ``tertiary`` kind fails loudly instead of falling
     through to a nonexistent ALPACA endpoint.
@@ -539,7 +596,7 @@ class Tertiary(Device):
         raise TreeStructureError(
             code=3002,
             message=f"Method {method!r} is not implemented on {type(self).__name__} "
-                    f"({self.sys_id}); use a vendor-specific tertiary kind (e.g. 'tertiaryOCA')",
+                    f"({self.sys_id}); configure a driver (e.g. driver: asa-autoslew)",
             severity=TreeStructureError.SEVERITY_CRITICAL,
         )
 
@@ -572,96 +629,11 @@ class Tertiary(Device):
         self._not_implemented('selectnasmythport')
 
 
-class TertiaryOCA(Tertiary):
-    """ASA AutoSlew tertiary (OCA), driven through the mount's ALPACA action channel.
-
-    All reads are served by the AutoSlew vendor action ``tertiarystatus``
-    (JSON: ``{"Moving", "MotorOn", "ErrorRaised", "Angle", "NasmythPort",
-    "PortName"}``); movement by ``selectnasmythport``. Port numbers are the
-    physical AutoSlew ports (jk15: 1=ADR6/beso, 2=ADR10/andor) — they are NOT
-    0-based; the observatory config maps them to instruments.
-
-    A controller fault (``ErrorRaised`` in the status) is translated to the
-    standard error model: every decomposed read raises ``TreeOtherError(4009,
-    NORMAL)`` ("device reported an error"), so subscribers and command flows
-    see it through their normal error handling instead of polling a
-    vendor-specific boolean. ``tertiarystatus`` itself always returns the raw
-    dict — the diagnostic view of a faulted controller.
-    """
-
-    async def nasmythport(self, **kwargs):
-        return await self._status_field('NasmythPort')
-
-    async def tertiarystatus(self, **kwargs):
-        return await self._status()
-
-    async def angle(self, **kwargs):
-        return await self._status_field('Angle')
-
-    async def moving(self, **kwargs):
-        return await self._status_field('Moving')
-
-    async def motoron(self, **kwargs):
-        return await self._status_field('MotorOn')
-
-    async def portname(self, **kwargs):
-        return await self._status_field('PortName')
-
-    async def selectnasmythport_put(self, **kwargs):
-        """Rotate M3 to a physical AutoSlew port. Parameter: ``Position`` (int or int-like str)."""
-        position = kwargs.get("Position", None)
-        try:
-            position = int(position)
-        except (TypeError, ValueError):
-            raise TreeOtherError(
-                address=None, code=4007,
-                message=f"selectnasmythport requires an integer 'Position' parameter, got {position!r}",
-                severity=TreeOtherError.SEVERITY_NORMAL) from None
-        ret = await self._put("action", kind=Telescope.KIND,
-                              Action='selectnasmythport', Parameters=str(position))
-        if str(ret).strip().lower() != 'true':
-            # AutoSlew acknowledges an accepted movement with "true"
-            raise TreeOtherError(
-                address=None, code=4009,
-                message=f"AutoSlew refused selectnasmythport {position}: {ret!r}",
-                severity=TreeOtherError.SEVERITY_NORMAL)
-        return ret
-
-    async def _status(self) -> dict:
-        raw = await self._put("action", kind=Telescope.KIND,
-                              Action='tertiarystatus', Parameters='')
-        try:
-            return json.loads(raw)
-        except (TypeError, ValueError):
-            raise TreeValueError(
-                address=None, code=2002,
-                message=f"Unparsable tertiarystatus reply from AutoSlew: {raw!r}",
-                severity=TreeValueError.SEVERITY_NORMAL) from None
-
-    async def _status_field(self, field: str):
-        """Extract one field from ``tertiarystatus``, translating a controller
-        fault into the standard 4009 device error."""
-        status = await self._status()
-        if status.get('ErrorRaised'):
-            raise TreeOtherError(
-                address=None, code=4009,
-                message=f"M3 controller reports an error (AutoSlew ErrorRaised); "
-                        f"status: {status!r}",
-                severity=TreeOtherError.SEVERITY_NORMAL)
-        try:
-            return status[field]
-        except KeyError:
-            raise TreeValueError(
-                address=None, code=2002,
-                message=f"Field {field!r} missing in AutoSlew tertiarystatus reply: {status!r}",
-                severity=TreeValueError.SEVERITY_NORMAL) from None
-
-
 class MirrorCell(Device):
     """Mirror cell (M1 support / active collimation) — interface contract.
 
     ALPACA has no mirror-cell device type; the hardware is driven through
-    vendor ``Action`` commands on the ASA ACC focuser (see ``MirrorCellACC``).
+    vendor ``Action`` commands on the ASA ACC focuser (driver ``asa-acc``).
     The base class declares the interface and every method raises ``3002`` so
     a tree configured with the plain ``mirrorcell`` kind fails loudly instead
     of falling through to a nonexistent ALPACA endpoint.
@@ -736,7 +708,7 @@ class MirrorCell(Device):
         raise TreeStructureError(
             code=3002,
             message=f"Method {method!r} is not implemented on {type(self).__name__} "
-                    f"({self.sys_id}); use a vendor-specific mirror-cell kind (e.g. 'mirrorcellACC')",
+                    f"({self.sys_id}); configure a driver (e.g. driver: asa-acc)",
             severity=TreeStructureError.SEVERITY_CRITICAL,
         )
 
@@ -821,296 +793,7 @@ class MirrorCell(Device):
         self._not_implemented('stopallmotors')
 
 
-class MirrorCellACC(MirrorCell):
-    """ASA ACC mirror cell, driven through the ACC *focuser*'s ALPACA action channel.
-
-    All reads are served by the single vendor action ``mirrorcell_info``
-    (``{"Available": bool, "Motors": [{"Index", "Position": {"Value", "Unit"},
-    "Status": {"Value", "Text"}}]}``); movement and stops by the
-    ``mirrorcell_move_*`` / ``mirrorcell_stop_*`` actions.
-
-    Wiring notes (verified on OCM 2026-08-04, ASCOM Remote Server 6.6.8419):
-
-    * The mirror cell is **not its own ALPACA device** — the actions live on the
-      ACC focuser, so every request is routed with ``kind=Focuser.KIND`` (the
-      same trick as ``CoverCalibratorOCA``). The component's own
-      ``device_number`` selects which focuser; on OCM that is ``0``.
-    * The action reply is **double-encoded**: the ALPACA envelope's ``Value`` is
-      a *string* containing JSON, hence the explicit ``json.loads`` here.
-    * Positions are metres and physically µm-scale (``-9.63e-05`` = −96.3 µm).
-      They are passed through unconverted — scaling belongs in whatever
-      publishes telemetry, not in the tree.
-    * Reads use ``ConvertPositionToAlpacaFocuserValue: false`` (native hardware
-      units). The ``true`` variant returns the same reading offset by +1 mm
-      while still reporting ``Unit: "m"``, so the flag — not the unit field —
-      decides the convention; the tree deliberately exposes one convention.
-    * ``mirrorcell_stop_all_motors`` is spelled with the trailing ``s`` (the
-      vendor doc drops it in one place; the driver's ``supportedactions`` has it).
-
-    The image plane exposes a byte-identical API under the ``imageplane_``
-    prefix, so it becomes a subclass overriding ``ACTION_PREFIX`` once hardware
-    reports it available (on OCM it currently reports ``Available: false``).
-    """
-
-    #: Vendor action prefix; ``imageplane`` shares the identical payload contract.
-    ACTION_PREFIX = 'mirrorcell'
-
-    async def available(self, **kwargs):
-        info = await self._info()
-        return bool(info.get('Available'))
-
-    async def mirrorcellstatus(self, **kwargs):
-        return await self._info()
-
-    async def positions(self, **kwargs):
-        return [self._position(m) for m in await self._motors()]
-
-    async def motorstatuses(self, **kwargs):
-        return [self._status_code(m) for m in await self._motors_raw()]
-
-    async def motorstatustexts(self, **kwargs):
-        return [self._status_text(m) for m in await self._motors_raw()]
-
-    async def atsetpoint(self, **kwargs):
-        return all(self._status_code(m) == self.AT_SETPOINT_STATUS for m in await self._motors())
-
-    async def moving(self, **kwargs):
-        return any(self._status_code(m) in self.MOVING_STATUSES for m in await self._motors())
-
-    async def _motor_position(self, index: int, **kwargs):
-        motor = await self._motor(index)
-        if self._status_code(motor) in self.FAULT_STATUSES:
-            self._raise_fault(motor)
-        return self._position(motor)
-
-    async def _motor_status(self, index: int, **kwargs):
-        return self._status_code(await self._motor(index))
-
-    async def _motor_statustext(self, index: int, **kwargs):
-        return self._status_text(await self._motor(index))
-
-    async def moveallmotorsto_put(self, **kwargs):
-        """Move all motors to absolute positions. Parameter: ``Positions`` (metres)."""
-        positions = self._require_motor_values(kwargs.get('Positions'), 'Positions')
-        return await self._command(
-            'move_all_motors_to',
-            PositionIsAlpacaFocuserValue=False,
-            Positions=[{"Value": v, "Unit": "m"} for v in positions],
-        )
-
-    async def moveallmotorsoffset_put(self, **kwargs):
-        """Move all motors by relative offsets. Parameter: ``Offsets`` (metres)."""
-        offsets = self._require_motor_values(kwargs.get('Offsets'), 'Offsets')
-        return await self._command(
-            'move_all_motors_offset',
-            Offsets=[{"Value": v, "Unit": "m"} for v in offsets],
-        )
-
-    async def moveonemotoroffset_put(self, **kwargs):
-        """Move one motor by a relative offset. Parameters: ``Index`` (int), ``Offset`` (metres)."""
-        index = self._require_index(kwargs.get('Index'))
-        offset = self._require_float(kwargs.get('Offset'), 'Offset')
-        return await self._command(
-            'move_one_motor_offset',
-            Index=index,
-            Offset={"Value": offset, "Unit": "m"},
-        )
-
-    async def stoponemotor_put(self, **kwargs):
-        """Stop one motor. Parameter: ``Index`` (int)."""
-        index = self._require_index(kwargs.get('Index'))
-        return await self._command('stop_one_motor', Index=index)
-
-    async def stopallmotors_put(self, **kwargs):
-        """Stop all motors. Takes no parameters (vendor expects an empty string)."""
-        action = f'{self.ACTION_PREFIX}_stop_all_motors'
-        return self._verify_ack(action, await self._action(action, ''))
-
-    # --- vendor plumbing -----------------------------------------------------
-
-    async def _action(self, action: str, parameters: str):
-        """Send one ACC action on the focuser device and return its raw reply."""
-        return await self._put("action", kind=Focuser.KIND, Action=action, Parameters=parameters)
-
-    async def _command(self, suffix: str, **parameters):
-        """Send an actuating action and verify the vendor acknowledgement."""
-        action = f'{self.ACTION_PREFIX}_{suffix}'
-        return self._verify_ack(action, await self._action(action, json.dumps(parameters)))
-
-    def _verify_ack(self, action: str, ret):
-        """The driver answers ``"ok"`` on success, an error message otherwise.
-
-        A non-``ok`` reply is a device refusal, so it becomes 4009 instead of
-        being returned as if the motion had been accepted.
-        """
-        if str(ret).strip().lower() != 'ok':
-            raise TreeOtherError(
-                address=None, code=4009,
-                message=f"ACC refused {action} on {self.sys_id}: {ret!r}",
-                severity=TreeOtherError.SEVERITY_NORMAL)
-        return ret
-
-    async def _info(self) -> dict:
-        raw = await self._action(
-            f'{self.ACTION_PREFIX}_info',
-            json.dumps({"ConvertPositionToAlpacaFocuserValue": False}))
-        try:
-            info = json.loads(raw)
-        except (TypeError, ValueError):
-            raise TreeValueError(
-                address=None, code=2002,
-                message=f"Unparsable {self.ACTION_PREFIX}_info reply from ACC: {raw!r}",
-                severity=TreeValueError.SEVERITY_NORMAL) from None
-        if not isinstance(info, dict):
-            raise TreeValueError(
-                address=None, code=2002,
-                message=f"Expected a JSON object from {self.ACTION_PREFIX}_info, got {info!r}",
-                severity=TreeValueError.SEVERITY_NORMAL)
-        return info
-
-    async def _motors_raw(self) -> List[dict]:
-        """Motors of an available mirror cell, ordered by motor index — no fault gate.
-
-        Serves the status reads, which must stay readable while a motor is
-        faulted. Raises 2002/CRITICAL when the subsystem is absent — permanent
-        for that telescope, so a SERVICE-policy subscriber stops instead of
-        retrying forever.
-        """
-        info = await self._info()
-        if not info.get('Available'):
-            raise TreeValueError(
-                address=None, code=2002,
-                message=f"Mirror cell is not available on {self.sys_id} "
-                        f"(ACC reports Available=false); read 'available' to probe "
-                        f"capability without raising",
-                severity=TreeValueError.SEVERITY_CRITICAL)
-        motors = info.get('Motors')
-        if not isinstance(motors, list) or not motors:
-            raise TreeValueError(
-                address=None, code=2002,
-                message=f"ACC reports the mirror cell available but sent no motors: {info!r}",
-                severity=TreeValueError.SEVERITY_NORMAL)
-        return sorted(motors, key=self._index)
-
-    async def _motors(self) -> List[dict]:
-        """Motors of a healthy, available mirror cell — the value-read gate.
-
-        On top of ``_motors_raw``, raises 4009/NORMAL when any motor reports a
-        fault: an aggregate value composed over a faulted motor would
-        masquerade as healthy data.
-        """
-        motors = await self._motors_raw()
-        faulted = [m for m in motors if self._status_code(m) in self.FAULT_STATUSES]
-        if faulted:
-            self._raise_fault(faulted[0], context=motors)
-        return motors
-
-    async def _motor(self, index: int) -> dict:
-        """One motor by vendor ``Index`` — no fault gate (callers decide)."""
-        index = self._require_index(index)
-        for motor in await self._motors_raw():
-            if self._index(motor) == index:
-                return motor
-        raise TreeValueError(
-            address=None, code=2002,
-            message=f"Mirror-cell motor {index} missing in ACC reply on {self.sys_id}",
-            severity=TreeValueError.SEVERITY_NORMAL)
-
-    def _raise_fault(self, motor: dict, context=None):
-        raise TreeOtherError(
-            address=None, code=4009,
-            message=f"Mirror-cell motor {self._index(motor)} on {self.sys_id} reports "
-                    f"{self._status_text(motor)!r}; status: {context if context is not None else motor!r}",
-            severity=TreeOtherError.SEVERITY_NORMAL,
-            device_errno=self._status_code(motor))
-
-    def _index(self, motor: dict) -> int:
-        return self._reply_number(self._require_field(motor, 'Index'), 'Index', int)
-
-    def _position(self, motor: dict) -> float:
-        return self._reply_number(
-            self._require_field(self._require_field(motor, 'Position'), 'Value'),
-            'Position.Value', float)
-
-    def _status_code(self, motor: dict) -> int:
-        return self._reply_number(
-            self._require_field(self._require_field(motor, 'Status'), 'Value'),
-            'Status.Value', int)
-
-    def _reply_number(self, value, field: str, convert):
-        """Convert a numeric field of the vendor reply, translating garbage to 2002."""
-        try:
-            return convert(value)
-        except (TypeError, ValueError):
-            raise TreeValueError(
-                address=None, code=2002,
-                message=f"Field {field!r} in ACC {self.ACTION_PREFIX} reply "
-                        f"is not a number: {value!r}",
-                severity=TreeValueError.SEVERITY_NORMAL) from None
-
-    def _status_text(self, motor: dict) -> str:
-        """Status name, preferring the vendor's own text over the local enum."""
-        status = self._require_field(motor, 'Status')
-        text = status.get('Text') if isinstance(status, dict) else None
-        return str(text) if text else self.STATUS_TEXTS.get(self._status_code(motor), 'Unknown')
-
-    def _require_field(self, source, field: str):
-        if not isinstance(source, dict) or field not in source:
-            raise TreeValueError(
-                address=None, code=2002,
-                message=f"Field {field!r} missing in ACC {self.ACTION_PREFIX} reply: {source!r}",
-                severity=TreeValueError.SEVERITY_NORMAL)
-        return source[field]
-
-    def _require_index(self, index) -> int:
-        try:
-            # bool is an int subclass and float truncation would silently pick
-            # the wrong motor (int(1.9) == 1) — both must fail, not convert.
-            if isinstance(index, bool) or (isinstance(index, float) and not index.is_integer()):
-                raise ValueError
-            index = int(index)
-        except (TypeError, ValueError):
-            raise TreeOtherError(
-                address=None, code=4007,
-                message=f"Mirror-cell commands require an integer 'Index', got {index!r}",
-                severity=TreeOtherError.SEVERITY_NORMAL) from None
-        if not 0 <= index < self.MOTOR_COUNT:
-            raise TreeOtherError(
-                address=None, code=4007,
-                message=f"Mirror-cell motor 'Index' must be 0..{self.MOTOR_COUNT - 1}, got {index}",
-                severity=TreeOtherError.SEVERITY_NORMAL)
-        return index
-
-    def _require_float(self, value, name: str) -> float:
-        try:
-            # bool would convert to a 1-metre command on a µm-scale actuator;
-            # NaN/±inf would even serialize as nonstandard JSON tokens.
-            if isinstance(value, bool) or not math.isfinite(number := float(value)):
-                raise ValueError
-            return number
-        except (TypeError, ValueError):
-            raise TreeOtherError(
-                address=None, code=4007,
-                message=f"Mirror-cell commands require a number for {name!r} (metres), "
-                        f"got {value!r}",
-                severity=TreeOtherError.SEVERITY_NORMAL) from None
-
-    def _require_motor_values(self, values, name: str) -> List[float]:
-        if isinstance(values, (str, bytes)) or not isinstance(values, (list, tuple)):
-            raise TreeOtherError(
-                address=None, code=4007,
-                message=f"{name!r} must be a list of {self.MOTOR_COUNT} numbers (metres), "
-                        f"got {values!r}",
-                severity=TreeOtherError.SEVERITY_NORMAL)
-        if len(values) != self.MOTOR_COUNT:
-            raise TreeOtherError(
-                address=None, code=4007,
-                message=f"{name!r} must hold exactly {self.MOTOR_COUNT} values "
-                        f"(one per motor), got {len(values)}",
-                severity=TreeOtherError.SEVERITY_NORMAL)
-        return [self._require_float(v, name) for v in values]
-
-
+#: kind → the TIC class of a generic component (no driver); a contract-only class raises 3002 until a driver
 _component_classes = {
     Telescope.KIND: Telescope,
     Dome.KIND: Dome,
@@ -1121,9 +804,6 @@ _component_classes = {
     Switch.KIND: Switch,
     SafetyMonitor.KIND: SafetyMonitor,
     CoverCalibrator.KIND: CoverCalibrator,
-    Tertiary.KIND: Tertiary,  # here is a custom key, normally shou by Tertiary but its specific kind only for OCA!
-    "tertiaryOCA": TertiaryOCA,  # here is a custom key !
-    'covercalibratorOCA': CoverCalibratorOCA,  # here is a custom key !
-    MirrorCell.KIND: MirrorCell,  # interface contract only — raises 3002; use a vendor kind below
-    'mirrorcellACC': MirrorCellACC,  # ASA ACC mirror cell (actions on the ACC focuser)
+    Tertiary.KIND: Tertiary,  # interface contract only — raises 3002; needs a driver
+    MirrorCell.KIND: MirrorCell,  # interface contract only — raises 3002; needs a driver
 }

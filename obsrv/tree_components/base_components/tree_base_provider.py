@@ -34,13 +34,15 @@ class TreeBaseProvider(TreeComponent, ABC):
     async def get_value(self, request: ValueRequest, **kwargs) -> Value or None:
         """
         This is the main method of generating a return value from a response.
-        A method can raise an TreeStructureError error if the address is not directed to that component but to components
-        deeper in the tree. The method can also raise TreeValueError, AddressError errors if you encounter any problems
-        generating the response. The errors may contain the appropriate error codes. This will send an error response
-        to the client.
+        A method can raise a bare TreeStructureError (no code, i.e. 3000) if the address is not directed to that
+        component but to components deeper in the tree. The method can also raise TreeValueError, AddressError errors
+        if you encounter any problems generating the response, or a TreeStructureError with an explicit code (3002: the
+        component does not implement the method). The errors may contain the appropriate error codes. This will send
+        an error response to the client.
 
         :param request: ValueRequest
-        :raise TreeStructureError: when method can't provide value and algorythm should looking a value in sub provider
+        :raise TreeStructureError: bare — when method can't provide value and algorythm should looking a value in sub
+            provider; with an explicit code — an error response to the client, like the other coded errors
         :raise TreeValueError: when the value cannot be generated and an error response should be returned to the client
         :raise AddressError: when address is wrong or damaged
         :raise TreeOtherError: when is some other errors
@@ -74,7 +76,12 @@ class TreeBaseProvider(TreeComponent, ABC):
             logger.error(f'Method get_value() returned wrong type, expected Value or None')
             re = ResponseError(2002, 'Can not create value', repr(self), severity=ResponseError.SEVERITY_NORMAL)
             return ValueResponse(request.address, None, False, re)
-        except TreeStructureError:
+        except TreeStructureError as e:
+            if e.code != TreeStructureError.CODE_GROUP:
+                # an explicit code answers the request (3002: not implemented, with the reason in the message); only
+                # the bare signal means "not mine, ask the subcontractor"
+                re = ResponseError.from_coded_error(component_name=repr(self), err=e)
+                return ValueResponse(request.address, None, False, re)
             if self._subcontractor:
                 result = None  # must be initialised before try so finally can safely test it
                 try:

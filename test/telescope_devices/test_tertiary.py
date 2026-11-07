@@ -3,7 +3,7 @@
 The base ``Tertiary`` declares the interface and must raise
 ``TreeStructureError(3002, CRITICAL)`` from every method — a tree configured
 with the plain ``tertiary`` kind fails loudly instead of falling through to a
-nonexistent ALPACA endpoint. ``TertiaryOCA`` implements the interface via the
+nonexistent ALPACA endpoint. ``TertiaryAutoslew`` implements the interface via the
 ASA AutoSlew vendor actions on the *telescope* ALPACA device: all reads come
 from ``tertiarystatus`` (decomposed into individually GET-able fields),
 movement from ``selectnasmythport``.
@@ -23,7 +23,8 @@ from obcom.data_colection.coded_error import TreeOtherError, TreeStructureError
 from obcom.data_colection.response_error import ResponseError
 from obcom.data_colection.value import TreeValueError
 
-from obsrv.telescope_devices.device_tree import Telescope, Tertiary, TertiaryOCA
+from obsrv.telescope_devices.device_tree import Telescope, Tertiary
+from obsrv.telescope_devices.drivers.asa_autoslew import TertiaryAutoslew
 
 JK15_STATUS = {
     "Moving": False,
@@ -71,11 +72,11 @@ class TertiaryBaseContractTest(unittest.IsolatedAsyncioTestCase):
         device._connector.put.assert_not_awaited()
 
 
-class TertiaryOCAActionsTest(unittest.IsolatedAsyncioTestCase):
-    """TertiaryOCA maps attributes onto AutoSlew actions routed via the telescope kind."""
+class TertiaryAutoslewActionsTest(unittest.IsolatedAsyncioTestCase):
+    """TertiaryAutoslew maps attributes onto AutoSlew actions routed via the telescope kind."""
 
     async def test_tertiarystatus_parses_autoslew_json(self):
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         device._connector.put.return_value = json.dumps(JK15_STATUS)
         result = await device.tertiarystatus()
         self.assertEqual(result, JK15_STATUS)
@@ -84,7 +85,7 @@ class TertiaryOCAActionsTest(unittest.IsolatedAsyncioTestCase):
             Action='tertiarystatus', Parameters='')
 
     async def test_tertiarystatus_unparsable_reply_raises_2002_normal(self):
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         device._connector.put.return_value = "not json"
         with self.assertRaises(TreeValueError) as ctx:
             await device.tertiarystatus()
@@ -93,7 +94,7 @@ class TertiaryOCAActionsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_decomposed_status_fields(self):
         """All reads, including nasmythport, decompose the single status action."""
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         device._connector.put.return_value = json.dumps(JK15_STATUS)
         for method, expected in [('nasmythport', 2),
                                  ('angle', JK15_STATUS['Angle']),
@@ -108,7 +109,7 @@ class TertiaryOCAActionsTest(unittest.IsolatedAsyncioTestCase):
                     Action='tertiarystatus', Parameters='')
 
     async def test_missing_status_field_raises_2002_normal(self):
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         device._connector.put.return_value = json.dumps({"Moving": False})
         with self.assertRaises(TreeValueError) as ctx:
             await device.angle()
@@ -117,7 +118,7 @@ class TertiaryOCAActionsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_error_raised_translates_to_4009_on_every_read(self):
         """Controller fault → standard device error, not a readable boolean."""
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         faulted = dict(JK15_STATUS, ErrorRaised=True)
         device._connector.put.return_value = json.dumps(faulted)
         for method in ['nasmythport', 'angle', 'moving', 'motoron', 'portname']:
@@ -129,13 +130,13 @@ class TertiaryOCAActionsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_error_raised_keeps_tertiarystatus_readable(self):
         """The raw status stays available as the diagnostic view of a faulted controller."""
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         faulted = dict(JK15_STATUS, ErrorRaised=True)
         device._connector.put.return_value = json.dumps(faulted)
         self.assertEqual(await device.tertiarystatus(), faulted)
 
     async def test_selectnasmythport_sends_position_as_parameters(self):
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         device._connector.put.return_value = "true"
         await device.selectnasmythport_put(Position=1)
         device._connector.put.assert_awaited_once_with(
@@ -143,7 +144,7 @@ class TertiaryOCAActionsTest(unittest.IsolatedAsyncioTestCase):
             Action='selectnasmythport', Parameters='1')
 
     async def test_selectnasmythport_accepts_int_like_string(self):
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         device._connector.put.return_value = "true"
         await device.selectnasmythport_put(Position="2")
         device._connector.put.assert_awaited_once_with(
@@ -152,7 +153,7 @@ class TertiaryOCAActionsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_selectnasmythport_missing_position_raises_4007(self):
         """No silent empty-Parameters action call for a movement command."""
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         for bad_kwargs in ({}, {"Position": None}, {"Position": "beso"}):
             with self.subTest(kwargs=bad_kwargs):
                 with self.assertRaises(TreeOtherError) as ctx:
@@ -163,7 +164,7 @@ class TertiaryOCAActionsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_selectnasmythport_refusal_raises_4009(self):
         """A non-'true' acknowledgement from AutoSlew is a device-reported error."""
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         device._connector.put.return_value = "false"
         with self.assertRaises(TreeOtherError) as ctx:
             await device.selectnasmythport_put(Position=5)
@@ -175,14 +176,14 @@ class TertiaryDeviceDispatchTest(unittest.IsolatedAsyncioTestCase):
     """Device.get()/put() dispatch resolves tertiary attributes to the methods."""
 
     async def test_get_dispatches_to_method_not_connector_get(self):
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         device._connector.put.return_value = json.dumps(JK15_STATUS)
         result = await device.get('angle')
         self.assertEqual(result, JK15_STATUS['Angle'])
         device._connector.get.assert_not_awaited()
 
     async def test_put_dispatches_to_selectnasmythport_put(self):
-        device = _make_tertiary(TertiaryOCA)
+        device = _make_tertiary(TertiaryAutoslew)
         device._connector.put.return_value = "true"
         await device.put('selectnasmythport', Position=2)
         device._connector.put.assert_awaited_once_with(
