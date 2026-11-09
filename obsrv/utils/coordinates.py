@@ -1,18 +1,17 @@
-from astropy.coordinates import Angle
-from astropy import units as u
+from pyaraucaria.coordinates import ra_to_decimal, dec_to_decimal
 
 
 def check_equatorial_coordinates(ra, dec):
     if isinstance(ra, str) and ra:
-        ra = Angle(ra, unit=u.hourangle).deg
+        ra = ra_to_decimal(ra)
     if isinstance(dec, str) and dec:
-        dec = Angle(dec, unit=u.deg).deg
+        dec = dec_to_decimal(dec)
     return ra, dec
 
 
 def check_horizontal_coordinates(az, alt):
     if isinstance(az, str) and az:
-        az = Angle(az, unit=u.deg).deg
+        az = dec_to_decimal(az)
     if isinstance(alt, str) and alt:
-        alt = Angle(alt, unit=u.deg).deg
+        alt = dec_to_decimal(alt)
     return az, alt
