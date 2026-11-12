@@ -17,7 +17,8 @@ from obcom.data_colection.tree_user import TreeServiceUser
 from obcom.data_colection.value import TreeValueError
 from obcom.data_colection.value_call import ValueRequest
 from serverish.base.datetime import dt_to_array
-from serverish.messenger.msg_rpc_req import MessengerRequestNoResponders, MessengerRequestTimeout
+from serverish.base import (MessengerConnectionClosed, MessengerNotConnected, MessengerRequestNoResponders,
+                            MessengerRequestTimeout)
 
 from obsrv.tree_components.specialized_components import tree_nats_service as module
 from obsrv.tree_components.specialized_components.tree_nats_service import TreeNatsService
@@ -186,7 +187,9 @@ class TreeNatsServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_transport_failures(self):
         cases = ((MessengerRequestNoResponders(Exception()), 4005, 'not running'),
-                 (MessengerRequestTimeout(Exception()), 4002, 'did not answer'))
+                 (MessengerRequestTimeout(Exception()), 4002, 'did not answer'),
+                 (MessengerNotConnected('NATS not connected'), 4005, 'cannot reach'),
+                 (MessengerConnectionClosed('connection closed'), 4005, 'cannot reach'))
         for exc, code, text in cases:
             with self.subTest(code=code):
                 self.requester.request.side_effect = exc

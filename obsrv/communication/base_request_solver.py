@@ -3,8 +3,7 @@ import logging
 from typing import Iterable, List, Optional
 from abc import ABC, abstractmethod
 import confuse
-from nats.errors import TimeoutError
-from serverish.base import dt_utcnow_array, MessengerNotConnected
+from serverish.base import dt_utcnow_array, ServerishError
 from serverish.messenger import get_publisher
 from obsrv.communication.nats_streams import NatsStreams
 from obcom.data_colection.response_error import ResponseError
@@ -245,10 +244,7 @@ class BaseRequestSolver(ABC):
                                         'sender': 'Ocabox server',
                                     })
             out = True
-        except MessengerNotConnected as e:
-            logger.error(f"Can not publish observatory config to nats, error: {e}")
-            out = False
-        except TimeoutError as e:
+        except ServerishError as e:  # every way serverish can fail to publish: not connected, no ack, transport
             logger.error(f"Can not publish observatory config to nats, error: {e}")
             out = False
         return out

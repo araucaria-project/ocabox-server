@@ -3,6 +3,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.11.1]
+### Fixed
+- Publishing the observatory configuration to NATS no longer lets a publish failure escape: the handler imported
+  `TimeoutError` from nats-py, which shadowed the builtin, so a missing JetStream ack
+  (`MessengerPublishAckTimeout`, serverish >= 2.2.0) and every other transport error went uncaught. It now catches
+  `ServerishError` and reports the failure as before (log + `False`).
+- NATS service driver: a request that fails because the NATS connection is missing or closed is a
+  `TreeOtherError(4005)` naming the subject, instead of an unhandled serverish exception.
+### Changed
+- Requires serverish >= 2.3.0 (error contract: every messenger failure is a `ServerishError`); no direct nats-py
+  imports are left in the server.
+
 ## [2.11.0]
 ### Added
 - `driver` in the component configuration: `kind` says what a component is, `driver` how TIC talks to it (the
