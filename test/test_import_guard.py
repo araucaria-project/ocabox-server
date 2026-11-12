@@ -10,10 +10,10 @@ class TestImportGuard(unittest.TestCase):
             check_dependency_versions(installed=lambda dist: "1.5.0" if dist == "ocabox-common" else REQUIRED[dist])
         self.assertIn("1.6.0", str(ctx.exception))
 
-    def test_rejects_serverish_whose_subscriber_never_receives(self):
+    def test_rejects_serverish_before_the_error_contract(self):
         with self.assertRaises(ImportError) as ctx:
-            check_dependency_versions(installed=lambda dist: "2.0.3" if dist == "serverish" else REQUIRED[dist])
-        self.assertIn("2.2.1", str(ctx.exception))
+            check_dependency_versions(installed=lambda dist: "2.2.1" if dist == "serverish" else REQUIRED[dist])
+        self.assertIn("2.3.0", str(ctx.exception))
 
     def test_accepts_required_and_newer(self):
         check_dependency_versions(installed=lambda dist: REQUIRED[dist])

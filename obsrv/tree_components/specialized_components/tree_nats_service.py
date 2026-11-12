@@ -36,7 +36,7 @@ from obcom.data_colection.value_call import ValueRequest
 from pydantic import TypeAdapter, ValidationError
 from serverish.base.datetime import dt_ensure_datetime
 from serverish.messenger import get_callbacksubscriber, get_rpcrequester
-from serverish.messenger.msg_rpc_req import MessengerRequestNoResponders, MessengerRequestTimeout
+from serverish.base import MessengerRequestNoResponders, MessengerRequestTimeout, ServerishError
 
 from obsrv.tree_components.base_components.tree_provider import TreeProvider
 from obsrv.tree_components.specialized_components.tree_base_request_blocker import TreeBaseRequestBlocker
@@ -187,6 +187,9 @@ class TreeNatsService(TreeProvider):
         except MessengerRequestTimeout:
             raise TreeOtherError(code=4002, severity=TreeOtherError.SEVERITY_NORMAL,
                                  message=f'{subject} did not answer within {timeout:.1f} s')
+        except ServerishError as e:  # no NATS connection, connection closed, transport failure
+            raise TreeOtherError(code=4005, severity=TreeOtherError.SEVERITY_NORMAL,
+                                 message=f'cannot reach {subject}: {e}')
         try:
             reply = _REPLY.validate_python(data)
         except ValidationError as e:
