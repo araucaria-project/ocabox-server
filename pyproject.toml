@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ocabox-server"
-version = "2.11.1"
+version = "2.12.0"
 license = "MIT"
 description = ""
 authors = ["Ernest Lasek <elasek@akond.com>, Mikołaj Kałuszyński <mkalusz@camk.edu.pl>"]

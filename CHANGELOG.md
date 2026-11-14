@@ -3,6 +3,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [2.12.0]
+### Added
+- NATS service driver: silence is verified, not assumed. A service TIC does not hear (no heartbeat and no status
+  for 3 keepalives) is asked directly over core NATS (`rpc.<realm>.<scope>.self.alive`; any answer counts, a
+  refusal too), with pauses growing from 1 s to 60 s, for as long as the silence lasts. The 4005 error of a GET
+  says what was found: the service is not running, does not answer, cannot be asked - or it answers, so it is
+  alive and its status does not reach TIC. The last case is a fault of TIC's NATS readers and is logged as ERROR;
+  TIC reports it and repairs nothing. Error codes are unchanged, only the message is longer.
+- NATS service driver: the end of a status or heartbeat reader is logged as ERROR and named in the error of
+  every GET (after it nothing can arrive, and the silence was blamed on the service).
+
 ## [2.11.1]
 ### Fixed
 - Publishing the observatory configuration to NATS no longer lets a publish failure escape: the handler imported

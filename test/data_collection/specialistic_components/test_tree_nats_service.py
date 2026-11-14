@@ -1,10 +1,12 @@
 """TreeNatsService — the generic NATS protocol driver, against a fake messenger.
 
-Pins: address ↔ subject permutation, push into the cache, liveness by broker clock (a replay after
+Pins: silence verified by asking the service directly (for ever, with what it said in the error),
+the end of a reader reported, address ↔ subject permutation, push into the cache, liveness by broker clock (a replay after
 a TIC restart is not a sign of life), GET from the mirror, PUT as RPC with the gate parameters and
 tree bookkeeping stripped, the caller and the deadline forwarded, and every failure mapped onto the
 obcom error model.
 """
+import asyncio
 import time
 import unittest
 from datetime import datetime, timezone
@@ -17,11 +19,11 @@ from obcom.data_colection.tree_user import TreeServiceUser
 from obcom.data_colection.value import TreeValueError
 from obcom.data_colection.value_call import ValueRequest
 from serverish.base.datetime import dt_to_array
-from serverish.base import (MessengerConnectionClosed, MessengerNotConnected, MessengerRequestNoResponders,
-                            MessengerRequestTimeout)
+from serverish.base import (MessengerConnectionClosed, MessengerNotConnected, MessengerReaderConfigError,
+                            MessengerRequestNoResponders, MessengerRequestTimeout)
 
 from obsrv.tree_components.specialized_components import tree_nats_service as module
-from obsrv.tree_components.specialized_components.tree_nats_service import TreeNatsService
+from obsrv.tree_components.specialized_components.tree_nats_service import Finding, TreeNatsService
 
 TS = [2026, 10, 19, 4, 0, 0, 0]
 
@@ -30,15 +32,26 @@ def _meta(subject: str, sent: float) -> dict:
     return {'nats': {'subject': subject, 'timestamp': dt_to_array(datetime.fromtimestamp(sent, timezone.utc))}}
 
 
+class _FakeReading:
+    """What serverish returns from subscribe(): the task which reads, as ``.task``."""
+
+    def __init__(self):
+        self.task = asyncio.get_running_loop().create_future()
+
+
 class _FakeSubscriber:
     def __init__(self, subject, deliver_policy):
         self.subject, self.deliver_policy, self.callback, self.closed = subject, deliver_policy, None, False
+        self.reading = None
 
     async def subscribe(self, callback):
         self.callback = callback
+        self.reading = _FakeReading()
+        return self.reading
 
     async def close(self):
         self.closed = True
+        self.reading.task.cancel()
 
 
 class TreeNatsServiceTest(unittest.IsolatedAsyncioTestCase):
@@ -209,6 +222,99 @@ class TreeNatsServiceTest(unittest.IsolatedAsyncioTestCase):
             await self.svc.get_value(self._request('camera.setpath', 'PUT', timeout=-1))
         self.assertEqual(ctx.exception.code, 4004)
         self.requester.request.assert_not_awaited()
+
+    # ---------------------------------------------------------------- silence is a suspicion
+
+    async def _silent_service(self, answer) -> TreeNatsService:
+        """A service with a short keepalive, silent from the start, whose direct answer is ``answer``."""
+        await self.svc.stop()
+        if isinstance(answer, BaseException):
+            self.requester.request.side_effect = answer
+        self.rpc_subjects.clear()
+        self.svc = TreeNatsService('nats-optics-jk15', 'optics', scope='jk15', keepalive=0.02)
+        self.svc.ASK_FIRST_PAUSE, self.svc.ASK_LONGEST_PAUSE = 0.01, 0.04
+        await self.svc.run()
+        self.status = self.subscribers['status.optics.jk15.>']
+        self.heartbeat = self.subscribers['svc.heartbeat.optics.jk15']
+        return self.svc
+
+    async def _silence_explained(self) -> str:
+        async with asyncio.timeout(2):
+            while self.svc._finding is None:
+                await asyncio.sleep(0.005)
+        with self.assertRaises(TreeOtherError) as ctx:
+            await self.svc.get_value(self._request('camera.sees'))
+        self.assertEqual(ctx.exception.code, 4005)
+        return ctx.exception.message
+
+    async def test_silent_service_is_asked_directly_and_the_error_says_what_it_said(self):
+        cases = ((MessengerRequestNoResponders(Exception()), Finding.NOT_RUNNING, 'it is not running'),
+                 (MessengerRequestTimeout(Exception()), Finding.UNANSWERED, 'does not answer'),
+                 (MessengerNotConnected('NATS not connected'), Finding.UNREACHABLE, 'cannot be asked (NATS not connected)'))
+        for answer, finding, text in cases:
+            with self.subTest(finding=finding):
+                await self._silent_service(answer)
+                message = await self._silence_explained()
+                self.assertIs(self.svc._finding[0], finding)
+                self.assertIn('never heard from', message)
+                self.assertIn(text, message)
+                self.assertEqual(set(self.rpc_subjects), {'rpc.optics.jk15.self.alive'})
+
+    async def test_service_which_answers_but_is_not_heard_is_a_loud_fault_of_the_readers(self):
+        with self.assertLogs('tree_nats_service', level='ERROR') as logs:
+            await self._silent_service(answer=None)      # the service answers the question
+            message = await self._silence_explained()
+        self.assertIs(self.svc._finding[0], Finding.UNHEARD)
+        self.assertIn('its status does not reach TIC', message)
+        self.assertIn("fault of TIC's NATS readers", logs.output[0])
+
+    async def test_a_refusal_is_an_answer_too(self):
+        self.requester.request.return_value = ({'status': 'error', 'code': 1002, 'severity': 'CRITICAL',
+                                                'message': 'no method self.alive'}, {})
+        await self._silent_service(answer=None)
+        await self._silence_explained()
+        self.assertIs(self.svc._finding[0], Finding.UNHEARD)
+
+    async def test_absent_service_is_asked_for_ever_with_growing_pauses(self):
+        await self._silent_service(MessengerRequestNoResponders(Exception()))
+        asked = []
+        self.requester.request.side_effect = lambda **kw: asked.append(time.monotonic()) or (_ for _ in ()).throw(
+            MessengerRequestNoResponders(Exception()))
+        await asyncio.sleep(0.4)
+        self.assertGreaterEqual(len(asked), 6)                    # it did not give up
+        pauses = [b - a for a, b in zip(asked, asked[1:])]
+        self.assertGreater(pauses[-1], 0.03)                      # ... and slowed down to the longest pause
+        self.assertLess(max(pauses), 0.2)
+
+    async def test_asking_ends_when_the_service_is_heard_again(self):
+        await self._silent_service(MessengerRequestNoResponders(Exception()))
+        await self._silence_explained()
+        self.svc._keepalive = 10                                  # from now on one sign of life lasts
+        with self.assertLogs('tree_nats_service', level='INFO') as logs:
+            await self._publish('camera.sees', 'dark')
+            async with asyncio.timeout(2):
+                while self.svc._finding is not None:
+                    await asyncio.sleep(0.005)
+        self.assertTrue(any('heard again' in line for line in logs.output))
+        asked = self.requester.request.await_count
+        await asyncio.sleep(0.15)
+        self.assertEqual(self.requester.request.await_count, asked)
+        self.assertEqual((await self.svc.get_value(self._request('camera.sees'))).v, 'dark')
+
+    async def test_a_stopped_reader_is_reported_and_named_in_the_error(self):
+        with self.assertLogs('tree_nats_service', level='ERROR') as logs:
+            self.status.reading.task.set_exception(MessengerReaderConfigError("No stream stores 'status.optics.jk15.>'"))
+            await asyncio.sleep(0)
+        self.assertIn('the status reader of TIC stopped', logs.output[0])
+        with self.assertRaises(TreeOtherError) as ctx:
+            await self.svc.get_value(self._request('camera.sees'))
+        self.assertIn('the status reader of TIC stopped: No stream stores', ctx.exception.message)
+
+    async def test_readers_closed_by_stop_are_not_reported(self):
+        with self.assertNoLogs('tree_nats_service', level='ERROR'):
+            await self.svc.stop()
+            await asyncio.sleep(0)
+        self.assertIsNone(self.svc._reader_fault)
 
     # ---------------------------------------------------------------- discovery and construction
 
