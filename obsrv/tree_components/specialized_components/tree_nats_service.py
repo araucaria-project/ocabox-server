@@ -143,10 +143,14 @@ class TreeNatsService(TreeProvider):
         Reported only - a reader which ended has a reason serverish calls fatal; it is not restarted here.
         """
         def ended(task: asyncio.Task) -> None:
-            if self._stopping or task.cancelled():
+            if self._stopping:
                 return
-            error = task.exception()
-            self._reader_faults[name] = f'the {name} reader of TIC stopped' + (f': {error}' if error else '')
+            if task.cancelled():  # by somebody else than stop(): as final as a failure
+                how = ': it was cancelled'
+            else:
+                error = task.exception()
+                how = f': {error}' if error else ''
+            self._reader_faults[name] = f'the {name} reader of TIC stopped{how}'
             logger.error(f'{self.get_name()}: {self._reader_faults[name]} - {self._scope}.{self._realm} is not '
                          f'served properly until TIC is restarted')
 

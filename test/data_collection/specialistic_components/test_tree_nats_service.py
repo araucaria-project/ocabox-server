@@ -322,6 +322,17 @@ class TreeNatsServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(ctx.exception.code, 4005)
         self.assertIn('is not known: the status reader of TIC stopped: stream gone', ctx.exception.message)
 
+    async def test_a_reader_cancelled_by_somebody_else_is_a_stopped_reader(self):
+        await self._publish('camera.sees', 'dark')
+        with self.assertLogs('tree_nats_service', level='ERROR') as logs:
+            self.status.reading.task.cancel()
+            await asyncio.sleep(0)
+        self.assertIn('the status reader of TIC stopped: it was cancelled', logs.output[0])
+        await self.heartbeat.callback({}, _meta('svc.heartbeat.optics.jk15', time.time()))
+        with self.assertRaises(TreeOtherError) as ctx:
+            await self.svc.get_value(self._request('camera.sees'))
+        self.assertIn('it was cancelled', ctx.exception.message)
+
     async def test_state_is_served_after_the_heartbeat_reader_stopped_while_status_arrives(self):
         with self.assertLogs('tree_nats_service', level='ERROR') as logs:
             self.heartbeat.reading.task.set_exception(MessengerReaderConfigError('stream gone'))
