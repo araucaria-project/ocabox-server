@@ -12,7 +12,8 @@ All notable changes to this project will be documented in this file.
   alive and its status does not reach TIC. The last case is a fault of TIC's NATS readers and is logged as ERROR;
   TIC reports it and repairs nothing. Error codes are unchanged, only the message is longer.
 - NATS service driver: the end of a status or heartbeat reader is logged as ERROR and named in the error of
-  every GET (after it nothing can arrive, and the silence was blamed on the service).
+  a GET. After the status reader stopped no GET is served, also while the heartbeat still arrives: what TIC
+  holds is the state from before, not the current one.
 
 ## [2.11.1]
 ### Fixed

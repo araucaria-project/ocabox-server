@@ -110,7 +110,7 @@ class TreeNatsService(TreeProvider):
         self._subscribers = []
         self._heard = asyncio.Event()  # a sign of life arrived
         self._finding: Optional[tuple[Finding, str]] = None  # what the silent service said when asked, with details
-        self._reader_fault: Optional[str] = None  # a reader of TIC stopped: nothing will arrive, whatever the service does
+        self._reader_faults: dict[str, str] = {}  # reader name -> how it stopped: nothing more arrives through it
         self._asking: Optional[asyncio.Task] = None
         self._stopping = False
 
@@ -146,9 +146,9 @@ class TreeNatsService(TreeProvider):
             if self._stopping or task.cancelled():
                 return
             error = task.exception()
-            self._reader_fault = f'the {name} reader of TIC stopped' + (f': {error}' if error else '')
-            logger.error(f'{self.get_name()}: {self._reader_fault} - {self._scope}.{self._realm} cannot be served '
-                         f'until TIC is restarted')
+            self._reader_faults[name] = f'the {name} reader of TIC stopped' + (f': {error}' if error else '')
+            logger.error(f'{self.get_name()}: {self._reader_faults[name]} - {self._scope}.{self._realm} is not '
+                         f'served properly until TIC is restarted')
 
         reading.task.add_done_callback(ended)
 
@@ -194,8 +194,8 @@ class TreeNatsService(TreeProvider):
     def _silent(self) -> TreeOtherError:
         since = 'never heard from' if self._contact is None else f'silent for {time.time() - self._contact:.0f} s'
         message = f'service {self._realm!r} for {self._scope} is {since}'
-        if self._reader_fault is not None:
-            message += f': {self._reader_fault}'
+        if self._reader_faults:
+            message += ': ' + '; '.join(self._reader_faults.values())
         elif self._finding is not None:
             message += f': {self._finding[1]}'
         return TreeOtherError(code=4005, severity=TreeOtherError.SEVERITY_NORMAL, message=message)
@@ -218,6 +218,8 @@ class TreeNatsService(TreeProvider):
                 await asyncio.sleep(max(window - (time.time() - self._contact), 0.0) + 0.01)  # until it would fall silent
                 continue
             finding, detail = await self._ask()
+            if self.is_alive():
+                continue  # heard while the question was on its way: the answer explains a silence which is over
             if self._finding is None or self._finding[0] is not finding:
                 log = logger.error if finding is Finding.UNHEARD else logger.warning
                 log(f'{self.get_name()}: service {self._realm!r} for {self._scope} is silent: {detail}')
@@ -256,6 +258,12 @@ class TreeNatsService(TreeProvider):
         element, item = self._element_item(request)
         if request.request_type == 'PUT':
             return await self._put(request, element, item)
+        if 'status' in self._reader_faults:
+            # the service may well be alive (its heartbeat may still arrive): what TIC holds of its
+            # state is what it was when the reader stopped, and must not be served as current
+            raise TreeOtherError(code=4005, severity=TreeOtherError.SEVERITY_NORMAL,
+                                 message=f'the state of service {self._realm!r} for {self._scope} is not known: '
+                                         f'{self._reader_faults["status"]}')
         if not self.is_alive():
             raise self._silent()
         try:

@@ -310,11 +310,49 @@ class TreeNatsServiceTest(unittest.IsolatedAsyncioTestCase):
             await self.svc.get_value(self._request('camera.sees'))
         self.assertIn('the status reader of TIC stopped: No stream stores', ctx.exception.message)
 
+    async def test_state_is_not_served_after_the_status_reader_stopped_even_with_a_live_heartbeat(self):
+        await self._publish('camera.sees', 'dark')
+        with self.assertLogs('tree_nats_service', level='ERROR'):
+            self.status.reading.task.set_exception(MessengerReaderConfigError('stream gone'))
+            await asyncio.sleep(0)
+        await self.heartbeat.callback({}, _meta('svc.heartbeat.optics.jk15', time.time()))
+        self.assertTrue(self.svc.is_alive())
+        with self.assertRaises(TreeOtherError) as ctx:
+            await self.svc.get_value(self._request('camera.sees'))
+        self.assertEqual(ctx.exception.code, 4005)
+        self.assertIn('is not known: the status reader of TIC stopped: stream gone', ctx.exception.message)
+
+    async def test_state_is_served_after_the_heartbeat_reader_stopped_while_status_arrives(self):
+        with self.assertLogs('tree_nats_service', level='ERROR') as logs:
+            self.heartbeat.reading.task.set_exception(MessengerReaderConfigError('stream gone'))
+            await asyncio.sleep(0)
+        self.assertIn('the heartbeat reader of TIC stopped', logs.output[0])
+        await self._publish('camera.sees', 'dark')         # status and its repeats are signs of life too
+        self.assertEqual((await self.svc.get_value(self._request('camera.sees'))).v, 'dark')
+
+    async def test_sign_of_life_during_the_question_leaves_no_finding(self):
+        await self._silent_service(MessengerRequestNoResponders(Exception()))
+        await self._silence_explained()
+        self.svc._finding = None
+        self.svc._keepalive = 10                                  # from now on one sign of life lasts
+
+        async def heard_while_asked(**kwargs):
+            await self._publish('camera.sees', 'dark')
+            return {'status': 'ok', 'result': None}, {}
+
+        self.requester.request.side_effect = heard_while_asked
+        with self.assertNoLogs('tree_nats_service', level='ERROR'):
+            async with asyncio.timeout(2):
+                while not self.svc.is_alive():
+                    await asyncio.sleep(0.005)
+            await asyncio.sleep(0.1)
+        self.assertIsNone(self.svc._finding)
+
     async def test_readers_closed_by_stop_are_not_reported(self):
         with self.assertNoLogs('tree_nats_service', level='ERROR'):
             await self.svc.stop()
             await asyncio.sleep(0)
-        self.assertIsNone(self.svc._reader_fault)
+        self.assertEqual(self.svc._reader_faults, {})
 
     # ---------------------------------------------------------------- discovery and construction
 
