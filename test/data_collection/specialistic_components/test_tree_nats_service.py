@@ -384,9 +384,14 @@ class TreeNatsServiceTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn('it is not running', message)
 
     async def test_an_answer_which_is_not_a_message_is_an_answer(self):
-        await self._silent_service(ValueError('Expecting value: line 1 column 1 (char 0)'))   # what json.loads says
-        await self._silence_explained()
-        self.assertIs(self.svc._finding[0], Finding.UNHEARD)
+        not_a_message = (ValueError('Expecting value: line 1 column 1 (char 0)'),          # not JSON: `OK`
+                         AttributeError("'NoneType' object has no attribute 'get'"),        # JSON `null`
+                         AttributeError("'list' object has no attribute 'get'"))            # JSON `[]`
+        for raised in not_a_message:
+            with self.subTest(raised=raised):
+                await self._silent_service(raised)
+                await self._silence_explained()
+                self.assertIs(self.svc._finding[0], Finding.UNHEARD)
 
     async def test_nothing_ends_the_asking(self):
         await self._silent_service(MessengerRequestNoResponders(Exception()))

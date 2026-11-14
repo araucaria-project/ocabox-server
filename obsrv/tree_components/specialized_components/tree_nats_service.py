@@ -260,7 +260,10 @@ class TreeNatsService(TreeProvider):
             finding, detail = Finding.UNANSWERED, ''
         except ServerishError as e:  # no NATS connection, connection closed, transport failure
             finding, detail = Finding.UNREACHABLE, str(e)
-        except ValueError:  # an answer which is not a message (not JSON, not text): still an answer
+        except (ValueError, AttributeError, TypeError):
+            # An answer arrived and is not a message: not JSON, or JSON which is not an object. Still an
+            # answer. These are what serverish raises for it today, having no error of its own for a
+            # malformed reply (AkondLab/serverish#71); narrow this to that error once it exists.
             finding, detail = Finding.UNHEARD, ''
         else:
             finding, detail = Finding.UNHEARD, ''
