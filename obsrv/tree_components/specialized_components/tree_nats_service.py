@@ -197,11 +197,15 @@ class TreeNatsService(TreeProvider):
 
     def _silent(self) -> TreeOtherError:
         since = 'never heard from' if self._contact is None else f'silent for {time.time() - self._contact:.0f} s'
-        message = f'service {self._realm!r} for {self._scope} is {since}'
-        if self._reader_faults:
-            message += ': ' + '; '.join(self._reader_faults.values())
-        elif self._finding is not None:
-            message += f': {self._finding[1]}'
+        return self._unavailable(f'service {self._realm!r} for {self._scope} is {since}')
+
+    def _unavailable(self, what: str) -> TreeOtherError:
+        """The 4005 of a GET, with everything TIC knows about why: its stopped readers, and what the
+        service said when asked directly (known while it is silent)."""
+        known = list(self._reader_faults.values())
+        if self._finding is not None and not self.is_alive():
+            known.append(self._finding[1])
+        message = what + (': ' + '; '.join(known) if known else '')
         return TreeOtherError(code=4005, severity=TreeOtherError.SEVERITY_NORMAL, message=message)
 
     @property
@@ -221,13 +225,17 @@ class TreeNatsService(TreeProvider):
                 pause = self.ASK_FIRST_PAUSE
                 await asyncio.sleep(max(window - (time.time() - self._contact), 0.0) + 0.01)  # until it would fall silent
                 continue
-            finding, detail = await self._ask()
-            if self.is_alive():
-                continue  # heard while the question was on its way: the answer explains a silence which is over
-            if self._finding is None or self._finding[0] is not finding:
-                log = logger.error if finding is Finding.UNHEARD else logger.warning
-                log(f'{self.get_name()}: service {self._realm!r} for {self._scope} is silent: {detail}')
-            self._finding = (finding, detail)
+            try:
+                finding, detail = await self._ask()
+            except Exception:  # nothing may end the asking: the next question is asked whatever this one did
+                logger.exception(f'{self.get_name()}: asking service {self._realm!r} for {self._scope} failed')
+            else:
+                if self.is_alive():
+                    continue  # heard while the question was on its way: the answer explains a silence which is over
+                if self._finding is None or self._finding[0] is not finding:
+                    log = logger.error if finding is Finding.UNHEARD else logger.warning
+                    log(f'{self.get_name()}: service {self._realm!r} for {self._scope} is silent: {detail}')
+                self._finding = (finding, detail)
             await self._wait_for_a_sign_of_life(pause)
             pause = min(pause * 2, self.ASK_LONGEST_PAUSE)
 
@@ -252,6 +260,8 @@ class TreeNatsService(TreeProvider):
             finding, detail = Finding.UNANSWERED, ''
         except ServerishError as e:  # no NATS connection, connection closed, transport failure
             finding, detail = Finding.UNREACHABLE, str(e)
+        except ValueError:  # an answer which is not a message (not JSON, not text): still an answer
+            finding, detail = Finding.UNHEARD, ''
         else:
             finding, detail = Finding.UNHEARD, ''
         return finding, finding.value.format(rpc=subject, detail=detail)
@@ -265,9 +275,7 @@ class TreeNatsService(TreeProvider):
         if 'status' in self._reader_faults:
             # the service may well be alive (its heartbeat may still arrive): what TIC holds of its
             # state is what it was when the reader stopped, and must not be served as current
-            raise TreeOtherError(code=4005, severity=TreeOtherError.SEVERITY_NORMAL,
-                                 message=f'the state of service {self._realm!r} for {self._scope} is not known: '
-                                         f'{self._reader_faults["status"]}')
+            raise self._unavailable(f'the state of service {self._realm!r} for {self._scope} is not known')
         if not self.is_alive():
             raise self._silent()
         try:

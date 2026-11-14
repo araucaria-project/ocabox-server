@@ -359,6 +359,47 @@ class TreeNatsServiceTest(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.1)
         self.assertIsNone(self.svc._finding)
 
+    async def test_error_names_every_stopped_reader_and_what_the_silent_service_said(self):
+        await self._silent_service(answer=None)                   # silent for TIC, and it answers when asked
+        with self.assertLogs('tree_nats_service', level='ERROR'):
+            self.status.reading.task.set_exception(MessengerReaderConfigError('stream gone'))
+            self.heartbeat.reading.task.cancel()
+            await asyncio.sleep(0)
+            async with asyncio.timeout(2):
+                while self.svc._finding is None:
+                    await asyncio.sleep(0.005)
+        with self.assertRaises(TreeOtherError) as ctx:
+            await self.svc.get_value(self._request('camera.sees'))
+        for part in ('is not known', 'the status reader of TIC stopped: stream gone',
+                     'the heartbeat reader of TIC stopped: it was cancelled', 'it answers rpc.optics.jk15.self.alive'):
+            self.assertIn(part, ctx.exception.message)
+
+    async def test_heartbeat_reader_stopped_then_silence_still_says_what_the_service_said(self):
+        await self._silent_service(MessengerRequestNoResponders(Exception()))
+        with self.assertLogs('tree_nats_service', level='ERROR'):
+            self.heartbeat.reading.task.set_exception(MessengerReaderConfigError('stream gone'))
+            await asyncio.sleep(0)
+        message = await self._silence_explained()
+        self.assertIn('the heartbeat reader of TIC stopped: stream gone', message)
+        self.assertIn('it is not running', message)
+
+    async def test_an_answer_which_is_not_a_message_is_an_answer(self):
+        await self._silent_service(ValueError('Expecting value: line 1 column 1 (char 0)'))   # what json.loads says
+        await self._silence_explained()
+        self.assertIs(self.svc._finding[0], Finding.UNHEARD)
+
+    async def test_nothing_ends_the_asking(self):
+        await self._silent_service(MessengerRequestNoResponders(Exception()))
+        await self._silence_explained()
+        asked = self.requester.request.await_count
+        self.requester.request.side_effect = RuntimeError('a bug in the question')
+        with self.assertLogs('tree_nats_service', level='ERROR') as logs:
+            async with asyncio.timeout(2):
+                while self.requester.request.await_count < asked + 3:
+                    await asyncio.sleep(0.005)
+        self.assertIn('asking service', logs.output[0])
+        self.assertFalse(self.svc._asking.done())
+
     async def test_readers_closed_by_stop_are_not_reported(self):
         with self.assertNoLogs('tree_nats_service', level='ERROR'):
             await self.svc.stop()
