@@ -1,32 +1,78 @@
-settings:
-  packet_size: 1024
-  command_timeout: 5.0
-  nats_url: "nats://127.0.0.1:4222"
-  nats_subject: "svc.rpc.iris" # Global topic
+# Protokół IRIS-CCD: serwer iriscom (UDP), wersja 3.5 (AF4.43).
+#
+# Ten plik opisuje, jak rozmawia iriscom. Jest wspólny dla każdego urządzenia z `protocol: iris_ccd`.
+# Dane konkretnego urządzenia (adres, filtry, matryca, temperatura) są w konfiguracji obserwatorium:
+# tree.<obserwatorium>.observatory.components.<komponent> (np. obsrv/config.yaml).
 
-mappings:
-  commands:
-    camera:
-      camerastate:
-        command: "sync"
-    filterwheel:
-      position:
-        command: "filter"
-        get_arg: "status"        
-    nats:
-      ccdtemperature:
-        key: "temperature"
-        subject: "svc.rpc.iris.camera.ccdtemperature"
+transport:
+  packet_size: 1024          # iriscom przyjmuje i odsyła wyłącznie pakiety tej długości (COMMAND_PACKET_SIZE)
+  encoding: ascii
 
-  actions:
-    startexposure:
-      - command: "et"
-        value: "{Duration}"
-      - command: "go"
-        value: null
-    stopexposure:
-      - command: "clear"
-        value: null
-    startdownload:
-      - command: "xfer"
-        value: "{filename}"
+timeouts:                    # [s] jak długo serwer czeka na odpowiedź iriscom
+  command: 5.0               # sync, et, clear, xfer (zmierzone: < 0.3 s)
+  filter_move: 60.0          # ruch koła filtrów (zmierzone: 4-34 s, pełny obrót 33.7 s)
+  filter_rehome: 300.0       # szukanie pozycji domowej koła (gdy rehome_enabled: true)
+  exposure_overhead: 15.0    # narzut `go` ponad czas ekspozycji: 3 odczyty + zapis plików (zmierzone: ok. 9.9 s)
+  exposure_margin: 30.0      # zapas doliczany do czasu ekspozycji i narzutu
+
+commands:                    # słowa komend iriscom
+  sync: sync                 # test łączności z elektroniką kamery
+  exposure_time: et          # `et <s>` ustawia czas ekspozycji, samo `et` go odczytuje
+  expose: go                 # ekspozycja: odczyt r, odczyt m, czekanie et, odczyt d, zapis 3 plików FITS
+  clear: clear               # reset detektora
+  xfer: xfer                 # `xfer [host [port]]` przesyłanie obrazów do zdalnego hosta, host '-' wyłącza
+  filter: filter             # `filter <numer>` ruch koła filtrów
+  filter_rehome: rehome      # `filter rehome` szukanie pozycji domowej koła
+  forbidden: [quit, dl]      # nigdy nie są wysyłane: quit zamyka iriscom, dl ponownie wgrywa kod DSP
+
+replies:                     # odpowiedź iriscom: "<czas UTC> <echo komendy>\n<status> <wiadomość>"
+  ok: OKAY
+  error_pattern: '^E(\d+)\s*(.*)$'     # E100 składnia, E201 zapis pliku, E202 xfer, E300 sprzęt, E301 filtr
+  exposure_time_pattern: '^etime = (-?\d+(?:\.\d+)?)$'
+  exposure_time_tolerance: 0.05        # iriscom wypisuje czas ekspozycji z dokładnością 0.1 s
+  exposure_files_pattern: '^(?P<name>\S+)r\s+(?P=name)d$'   # "iris00447182r iris00447182d"
+  frame_number_pattern: '(\d+)$'       # numer ekspozycji na końcu nazwy pliku
+  xfer_pattern: '^(?P<host>\S+)\s+(?P<port>\d+)$'          # "- 4980"
+  xfer_disabled_host: '-'
+
+images:                      # gdzie iriscom zapisuje zdjęcia na swojej maszynie (config.h: FILE_DIR, FILE_SUFFIX)
+  dir: /scr
+  suffix: .fits
+  frames:                    # litera klatki na końcu nazwy pliku
+    reset: r
+    middle: m
+    data: d
+
+camera:
+  states:                    # kody camerastate (ASCOM)
+    idle: 0
+    exposing: 2
+    reading: 3
+    error: 5
+  fixed:                     # stałe wynikające z możliwości iriscom: brak binowania, podramek, migawki, chłodzenia
+    binx: 1
+    biny: 1
+    maxbinx: 1
+    maxbiny: 1
+    startx: 0
+    starty: 0
+    canabortexposure: false
+    canstopexposure: false
+    canasymmetricbin: false
+    canfastreadout: false
+    cangetcoolerpower: false
+    canpulseguide: false
+    cansetccdtemperature: false
+    hasshutter: false
+
+filterwheel:
+  first_slot: 1              # zakres numerów filtrów w iriscom (filter.c: FIRST_FILTER..LAST_FILTER)
+  last_slot: 8
+  unknown_position: -1       # position, gdy serwer nie zna pozycji koła (po starcie serwera, w ruchu, po rehome)
+  skip_same_position: true   # iriscom przy ruchu na bieżący filtr robi pełny obrót (~34 s), serwer go pomija
+  rehome_enabled: false      # rehome jest zawodny (czujnik Halla zwraca same zera), dlatego wyłączony
+
+nats:                        # odczyt temperatury detektora (subject i ścieżki w konfiguracji kamery)
+  deliver_policy: last       # po subskrypcji od razu ostatnia znana wartość
+  first_value_wait: 3.0      # [s] ile czekać na pierwszą wiadomość po subskrypcji
+  resubscribe_interval: 10.0 # [s] najczęściej ponawiana subskrypcja po błędzie czytnika
