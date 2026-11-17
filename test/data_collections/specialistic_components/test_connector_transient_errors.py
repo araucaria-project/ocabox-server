@@ -1,0 +1,171 @@
+"""Regression: instrument connectors must NOT silently swallow transient
+TCP errors. ECONNREFUSED, broken pipe, and timeouts against the device
+must surface as ``TreeOtherError(4005, NORMAL)`` so cycle-query
+subscribers running ``ErrorPolicy.SERVICE`` (PMS-style daemons)
+auto-recover when the device returns. Device-replied errors (an
+``E<code>`` reply of iriscom) must surface as
+``TreeOtherError(4009, NORMAL)`` ("device reported an error") rather than
+being swallowed.
+
+See ``doc/errors.md`` "TEMPORARY vs NORMAL — blip vs sustained" for the
+convention and issue #20 for the failure mode this test guards against.
+"""
+from __future__ import annotations
+
+import asyncio
+import unittest
+from unittest.mock import AsyncMock, MagicMock
+
+from obcom.data_colection.coded_error import TreeOtherError
+from obcom.data_colection.response_error import ResponseError
+from obsrv.protocols.alpaca.alpaca_connector import AlpacaConnector
+from obsrv.protocols.alpaca.alpaca_exceptions import AlpacaError
+from obsrv.protocols.iris_ccd.iris_ccd_connector import IrisCcdConnector, IrisReply
+from obsrv.protocols.pilar.pilar_connector import PilarConnector
+from test.protocols.iris_ccd.fake_iriscom import fast_settings
+
+
+def _make_iris_connector(command: AsyncMock) -> IrisCcdConnector:
+    """An IrisCcdConnector whose iriscom session answers through ``command`` (no sockets)."""
+    c = IrisCcdConnector(settings=fast_settings())
+    session = MagicMock()
+    session.busy_with = None
+    session.command = command
+    c._session = MagicMock(return_value=session)
+    return c
+
+
+def _make_iris_component(kind: str = 'camera', address: str = '127.0.0.1:8888') -> MagicMock:
+    component = MagicMock()
+    component.kind = kind
+    component.sys_id = f'iris.{kind}'
+    component.get_option_recursive.return_value = address
+    return component
+
+
+class IrisCcdTransientErrorsTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncTearDown(self):
+        IrisCcdConnector.close_all()
+
+    async def test_get_connection_refused_raises_4005_normal(self):
+        connector = _make_iris_connector(AsyncMock(side_effect=ConnectionRefusedError(111, 'Connection refused')))
+        with self.assertRaises(TreeOtherError) as ctx:
+            await connector.get(_make_iris_component(), 'connected')
+        self.assertEqual(ctx.exception.code, 4005)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+
+    async def test_get_timeout_raises_4005_normal(self):
+        connector = _make_iris_connector(AsyncMock(side_effect=asyncio.TimeoutError()))
+        with self.assertRaises(TreeOtherError) as ctx:
+            await connector.get(_make_iris_component(), 'connected')
+        self.assertEqual(ctx.exception.code, 4005)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+
+    async def test_get_broken_pipe_raises_4005_normal(self):
+        connector = _make_iris_connector(AsyncMock(side_effect=BrokenPipeError()))
+        with self.assertRaises(TreeOtherError) as ctx:
+            await connector.get(_make_iris_component(), 'xfer')
+        self.assertEqual(ctx.exception.code, 4005)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+
+    async def test_device_error_reply_raises_4009_normal(self):
+        """iriscom answered ``E<code>``: the connector worked, the instrument faulted — 4009 NORMAL with the
+        iriscom code in ``device_errno``, distinct from a TIC-internal value-build failure."""
+        connector = _make_iris_connector(AsyncMock(
+            return_value=IrisReply(command='clear', ok=False, code=300, message='Reset failed.')))
+        with self.assertRaises(TreeOtherError) as ctx:
+            await connector.put(_make_iris_component(), 'clear')
+        self.assertEqual(ctx.exception.code, 4009)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+        self.assertEqual(ctx.exception.kwargs.get('device_errno'), 300)
+
+    async def test_put_connection_refused_raises_4005_normal(self):
+        connector = _make_iris_connector(AsyncMock(side_effect=ConnectionRefusedError(111, 'Connection refused')))
+        with self.assertRaises(TreeOtherError) as ctx:
+            await connector.put(_make_iris_component(), 'xfer', Host='aux')
+        self.assertEqual(ctx.exception.code, 4005)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+
+    async def test_put_device_error_raises_4009_normal(self):
+        connector = _make_iris_connector(AsyncMock(
+            return_value=IrisReply(command='sync', ok=False, code=300, message='Camera electronics not responding.')))
+        with self.assertRaises(TreeOtherError) as ctx:
+            await connector.put(_make_iris_component(), 'connected', Connected=True)
+        self.assertEqual(ctx.exception.code, 4009)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+
+
+class AlpacaDeviceErrorTest(unittest.TestCase):
+    """ALPACA numeric driver faults (e.g. ASCOM InvalidOperationException 1035
+    "Telescope is not ready, please clear Error") surface as
+    ``TreeOtherError(4009, NORMAL)`` carrying the driver's ``error_number`` in
+    ``device_errno`` — distinct from device-busy (4008) and from a TIC-internal
+    value-build failure (2002). ``raise_tree_exeption`` re-raises the mapped
+    coded error; it uses no connector state, so a bare instance suffices."""
+
+    @staticmethod
+    def _connector() -> AlpacaConnector:
+        c = AlpacaConnector.__new__(AlpacaConnector)
+        c._http_session = None  # quiet __del__/is_session_closed on GC of the bare instance
+        return c
+
+    def test_numeric_error_raises_4009_with_device_errno(self):
+        err = AlpacaError(1035, "Telescope is not ready, please clear Error")
+        with self.assertRaises(TreeOtherError) as ctx:
+            self._connector().raise_tree_exeption(
+                err, address="http://tcu:11111/api/v1/telescope/0/slewtocoordinatesasync")
+        self.assertEqual(ctx.exception.code, 4009)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+        self.assertEqual(ctx.exception.kwargs.get('device_errno'), 1035)
+        self.assertIn("clear Error", ctx.exception.message)
+
+    def test_device_busy_errno_still_raises_4008(self):
+        err = AlpacaError(20072, "DRV_ACQUIRING")
+        with self.assertRaises(TreeOtherError) as ctx:
+            self._connector().raise_tree_exeption(err, address="http://tcu:11111/x")
+        self.assertEqual(ctx.exception.code, 4008)
+
+
+def _make_pilar_connector() -> PilarConnector:
+    c = PilarConnector.__new__(PilarConnector)
+    c._command_map = {'mount': {'rightascension': 'POSITION.MOUNT.RA'}}
+    c._actions_map = {}
+    c._timeouts = {'get': 1.0, 'set': 1.0}
+    c._focuser_multiplier = 1
+    return c
+
+
+class PilarTransientErrorsTest(unittest.IsolatedAsyncioTestCase):
+    """Pilar surfaces the same ``_TEMPORARY_IO_ERRORS`` family — verify
+    severity matches iris (NORMAL, not TEMPORARY) so the convention is
+    consistent across instrument connectors."""
+
+    async def test_get_connection_refused_raises_4005_normal(self):
+        connector = _make_pilar_connector()
+        connector._get_connection_resources = AsyncMock(
+            side_effect=ConnectionError('Pilar at 127.0.0.1:65432 not reachable')
+        )
+        connector._is_outage = MagicMock(return_value=True)  # suppress the warning log
+        component = MagicMock()
+        component.kind = 'mount'
+        component.sys_id = 'pilar.mount'
+        component.get_option_recursive.return_value = '127.0.0.1:65432'
+
+        with self.assertRaises(TreeOtherError) as ctx:
+            await connector.get(component, 'rightascension')
+        self.assertEqual(ctx.exception.code, 4005)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+
+    async def test_get_timeout_raises_4005_normal(self):
+        connector = _make_pilar_connector()
+        connector._get_connection_resources = AsyncMock(side_effect=asyncio.TimeoutError())
+        connector._is_outage = MagicMock(return_value=True)
+        component = MagicMock()
+        component.kind = 'mount'
+        component.sys_id = 'pilar.mount'
+        component.get_option_recursive.return_value = '127.0.0.1:65432'
+
+        with self.assertRaises(TreeOtherError) as ctx:
+            await connector.get(component, 'rightascension')
+        self.assertEqual(ctx.exception.code, 4005)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
