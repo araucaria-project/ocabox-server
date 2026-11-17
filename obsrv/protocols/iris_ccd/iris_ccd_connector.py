@@ -140,6 +140,9 @@ class ProtocolSettings:
             self.unknown_position = int(_path(cfg, 'filterwheel.unknown_position'))
             self.skip_same_position = bool(_path(cfg, 'filterwheel.skip_same_position'))
             self.rehome_enabled = bool(_path(cfg, 'filterwheel.rehome_enabled'))
+            self.default_focus_offset = int(_path(cfg, 'filterwheel.default_focus_offset'))
+            self.info = {kind: {key: str(_path(cfg, f'info.{kind}.{key}')) for key in ('name', 'description')}
+                         for kind in (_CAMERA, _FILTERWHEEL)}
             self.deliver_policy = str(_path(cfg, 'nats.deliver_policy'))
             self.first_value_wait = float(_path(cfg, 'nats.first_value_wait'))
             self.resubscribe_interval = float(_path(cfg, 'nats.resubscribe_interval'))
@@ -469,6 +472,8 @@ class IrisCcdConnector(Connector):
             raise RuntimeError(str(e)) from e
         self._get_handlers: Dict[str, Dict[str, Callable]] = {
             _CAMERA: {
+                'name': self._info_getter(_CAMERA, 'name'),
+                'description': self._info_getter(_CAMERA, 'description'),
                 'connected': self._get_connected,
                 'camerastate': self._get_camerastate,
                 'imageready': self._get_imageready,
@@ -488,9 +493,12 @@ class IrisCcdConnector(Connector):
                 **{name: self._fixed_getter(name) for name in self.settings.camera_fixed},
             },
             _FILTERWHEEL: {
+                'name': self._info_getter(_FILTERWHEEL, 'name'),
+                'description': self._info_getter(_FILTERWHEEL, 'description'),
                 'connected': self._get_connected,
                 'position': self._get_position,
                 'names': self._get_names,
+                'focusoffsets': self._get_focusoffsets,
             },
         }
         self._put_handlers: Dict[str, Dict[str, Callable]] = {
@@ -651,6 +659,11 @@ class IrisCcdConnector(Connector):
     def _option_getter(self, name: str):
         async def getter(component, data):
             return self._option(component, name)
+        return getter
+
+    def _info_getter(self, kind: str, key: str):
+        async def getter(component, data):
+            return self.settings.info[kind][key]
         return getter
 
     def _fixed_getter(self, name: str):
@@ -904,6 +917,23 @@ class IrisCcdConnector(Connector):
 
     async def _get_names(self, component, data) -> Dict[str, int]:
         return self._filters(component)
+
+    async def _get_focusoffsets(self, component, data) -> list:
+        """Focus offsets indexed like ``position``, i.e. by the iriscom slot number: index 0 (no slot in iriscom)
+        and slots without an entry in ``focus_offsets`` get ``default_focus_offset`` of the protocol settings."""
+        filters = self._filters(component)
+        configured = component.get_option_recursive('focus_offsets') or {}
+        if not isinstance(configured, dict):
+            raise IrisConfigError(f"{component.sys_id}: 'focus_offsets' must map filter names to offsets")
+        offsets = [self.settings.default_focus_offset] * (self.settings.last_slot + 1)
+        for name, offset in configured.items():
+            if str(name) not in filters:
+                raise IrisConfigError(f"{component.sys_id}: focus offset for {name!r}, which is not in 'filters'")
+            if isinstance(offset, bool) or not isinstance(offset, int):
+                raise IrisConfigError(f"{component.sys_id}: focus offset of {name!r} must be an integer, "
+                                      f"got {offset!r}")
+            offsets[filters[str(name)]] = offset
+        return offsets
 
     async def _get_position(self, component, data) -> int:
         position = self._session(component).filter_position

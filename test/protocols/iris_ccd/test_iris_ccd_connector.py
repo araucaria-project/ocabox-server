@@ -223,6 +223,29 @@ class FilterWheelTest(IrisTestCase):
     async def test_names(self):
         self.assertEqual(await self.wheel_connector.get(self.wheel, 'names'), {'J': 8, 'H': 7, 'K': 5})
 
+    async def test_focusoffsets_default(self):
+        self.assertEqual(await self.wheel_connector.get(self.wheel, 'focusoffsets'), [0] * 9)
+        self.assertEqual(self.fake.received, [])
+
+    async def test_focusoffsets_indexed_by_slot(self):
+        wheel = StubComponent('filterwheel', filterwheel_options(self.fake.address, focus_offsets={'J': 12, 'K': -3}))
+        offsets = await self.wheel_connector.get(wheel, 'focusoffsets')
+        self.assertEqual(len(offsets), 9)
+        self.assertEqual(offsets[8], 12)   # J
+        self.assertEqual(offsets[7], 0)    # H: no entry
+        self.assertEqual(offsets[5], -3)   # K
+
+    async def test_focusoffsets_bad_configuration(self):
+        for bad in ({'X': 1}, {'J': 1.5}, ['J']):
+            wheel = StubComponent('filterwheel', filterwheel_options(self.fake.address, focus_offsets=bad))
+            await self.assertCoded(self.wheel_connector.get(wheel, 'focusoffsets'), TreeStructureError, 3001)
+
+    async def test_name_and_description(self):
+        self.assertEqual(await self.wheel_connector.get(self.wheel, 'name'), 'IRIS filter wheel')
+        self.assertIn('iriscom', await self.wheel_connector.get(self.wheel, 'description'))
+        self.assertEqual(await self.camera_connector.get(self.camera, 'name'), 'IRIS camera')
+        self.assertEqual(self.fake.received, [])
+
     async def test_position_unknown_until_set(self):
         self.assertEqual(await self.wheel_connector.get(self.wheel, 'position'), -1)
         result = await self.wheel_connector.put(self.wheel, 'position', Position=8)

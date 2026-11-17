@@ -71,6 +71,15 @@ filterwheel:
   unknown_position: -1       # position, gdy serwer nie zna pozycji koła (po starcie serwera, w ruchu, po rehome)
   skip_same_position: true   # iriscom przy ruchu na bieżący filtr robi pełny obrót (~34 s), serwer go pomija
   rehome_enabled: false      # rehome jest zawodny (czujnik Halla zwraca same zera), dlatego wyłączony
+  default_focus_offset: 0    # focusoffsets dla slotów bez wpisu w focus_offsets komponentu (i dla indeksu 0)
+
+info:                        # GET name / description (wspólne odczyty komponentów)
+  camera:
+    name: IRIS camera
+    description: IRIS camera served by iriscom (UDP)
+  filterwheel:
+    name: IRIS filter wheel
+    description: IRIS filter wheel served by iriscom (UDP)
 
 nats:                        # odczyt temperatury detektora (subject i ścieżki w konfiguracji kamery)
   deliver_policy: last       # po subskrypcji od razu ostatnia znana wartość
