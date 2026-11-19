@@ -1,198 +1,233 @@
-settings:
-  connection_pool_size: 10
-  id_pool_range: [101, 10000]
-  timeouts:
-    connection: 10.0
-    get_command: 10.0
-    set_command: 120.0
-    pool_get: 5.0
-  focuser:
-    multiplier: 1000.0
+# Protokół Pilar: TPL2 (OpenTSI), Pilar 3.3-3r21 w IRIS.
+#
+# Ten plik opisuje, jak connector rozmawia z Pilarem i jak metody Ocabox API przekładają się na zmienne TPL2.
+# Jest wspólny dla każdego komponentu z `protocol: pilar`. Adres Pilara i numery urządzeń (`device_number`) są
+# w konfiguracji obserwatorium: tree.<obserwatorium>.observatory.components.<komponent> (np. obsrv/config.yaml).
+# Wartości opisane jako "zmierzone" pochodzą z testów na Pilarze 18-19.11.2026.
+#
+# Mapping (sekcja `components`):
+#   get / put   metoda Ocabox -> zmienna TPL2 (napis) albo procedura connectora ({procedure: nazwa, ...opcje})
+#               * get z napisem: odczyt zmiennej; put z napisem: SET zmiennej na jedyny parametr requestu
+#               * w nazwie zmiennej {device_number} zastępowany jest numerem urządzenia komponentu
+#   actions     metody, które tree wysyła jako put('action', Action=<nazwa>): te same formy co get / put
+#   fixed       stałe wartości odczytów (GET)
+# Metoda, której nie ma w mappingu, dostaje 3002 (nie zaimplementowana). Żeby wyłączyć metodę, usuń jej linię.
+# Procedury (logika: czekanie, zamrożenia, SYNCMODE, zatrzymanie) są w kodzie; zmienne, na których pracują,
+# są w sekcji `procedures`.
+
+link:
+  encoding: latin-1            # kodowanie linii TPL2
+  pool_size: 4                 # stałe połączenia z Pilarem, wspólne dla wszystkich komponentów pod jednym adresem:
+                               # 1 dla watchera, reserved_for_stop dla abortslew, reszta na odczyty i komendy
+  reserved_for_stop: 1
+  long_connections: 2          # dodatkowe połączenia na komendy czekające na koniec ruchu (READY, pokrywy,
+                               # derotator); zamykane po użyciu. Pilar przyjmuje najwyżej 10 klientów.
+  command_ids: [101, 999999]   # zakres numerów komend
+  reconnect_cooldown: 30.0     # [s] po nieudanym połączeniu kolejna próba najwcześniej po tym czasie
+
+timeouts:                      # [s]
+  connect: 5.0
+  greeting: 5.0                # powitanie TPL2 i AUTH OK
+  command: 3.0                 # odpowiedź na GET / SET (zmierzone: 1-2 ms)
+  pool_wait: 5.0               # czekanie na wolne połączenie, potem 4008
+  stalled_connection: 60.0     # połączenie czekające dłużej na spóźnioną odpowiedź jest zamykane
+
+watcher:                       # watcher: jeden GET stanu co poll_interval, z niego odczyty klientów
+  poll_interval: 0.5           # [s]
+  snapshot_max_age: 1.0        # [s] odczyt klienta z migawki, jeśli nie jest starsza
+  freeze_after: 2.0            # [s] brak odpowiedzi tak długo = zamrożenie (zmierzone: 16-18 s co 58-82 s)
+  post_freeze_guard: 3.0       # [s] tyle po zamrożeniu FAILED i READY_STATE=0 są chwilowe (zmierzone: 1-2 s)
+  outage_after: 180.0          # [s] zamrożenie dłuższe = awaria łącza: 4005 NORMAL, tracking nie jest wznawiany
+  command_freeze_wait: 20.0    # [s] tyle komenda czeka na koniec zamrożenia, potem 4005 TEMPORARY
+  retrack_attempts: 3          # próby wznowienia tracking po zamrożeniu (na końcu zamrożenia TRACK spada do 0)
+  retrack_retry: 2.0           # [s] odstęp między próbami
+  retrack_window: 10.0         # [s] TRACK=0 tyle po zamrożeniu = skutek zamrożenia; później = Pilar zatrzymał
+                               # tracking sam (np. limit) i connector go nie wznawia
+
+state:                         # zmienne stanu, które watcher czyta zawsze
+  ready_state: TELESCOPE.READY_STATE   # -3 lokalnie, -2 stop awaryjny, -1 błędy, 0 wyłączony, 0.1-0.9 przejście,
+  ready_value: 1                       #  1 gotowy
+  off_value: 0
+  track: POINTING.TRACK
+  tracking_value: 1                    # POINTING.TRACK w trakcie tracking
+  azimuth: POSITION.HORIZONTAL.AZ
+  altitude: POSITION.HORIZONTAL.ALT
+
+mount:                         # ocena ruchu montażu; TELESCOPE.MOTION_STATE migocze, więc connector liczy sam
+  slew_speed: 0.05             # [st/s] szybciej na niebie = ruch (tracking: ok. 0.004 st/s, slew: do ok. 10 st/s)
+  speed_window: 1.0            # [s] okno liczenia prędkości (pozycje odświeżają się ok. 4 Hz)
+  settle_time: 2.0             # [s] tyle wolniej niż slew_speed = koniec slew
+  arrival_tolerance: 0.1       # [st] odległość od celu az/alt uznana za dojechanie
+  start_delay_altaz: 1.0       # [s] po TRACK=2 ruch zaczyna się po tym czasie (zmierzone: 0.3-0.8 s)
+  start_delay_track: 5.0       # [s] po TRACK=1 (zmierzone: 3-4 s)
+  start_delay_abort: 2.5       # [s] reakcja na nowy cel w ruchu (zmierzone: 1-2 s)
+  max_slew_time: 180.0         # [s] po tym slew uznany za skończony (z ostrzeżeniem w logu)
+  sync_slew_timeout: 300.0     # [s] slewtoaltaz / slewtocoordinates czekają najwyżej tyle (tree może przerwać wcześniej)
+  queue_wait: 300.0            # [s] tyle ruch focusera / rotatora czeka na koniec slew montażu
+
+procedures:
+  power:                       # park, unpark, motoron
+    ready: TELESCOPE.READY
+    timeout_on: 60.0           # [s] READY=1 (zmierzone: 2.6-19 s); otwiera też pokrywy
+    timeout_off: 120.0         # [s] READY=0 (zmierzone: 31-55 s); parkuje, zamyka pokrywy, wyłącza
+  slew_altaz:
+    azimuth: OBJECT.HORIZONTAL.AZ
+    altitude: OBJECT.HORIZONTAL.ALT
+    track: POINTING.TRACK
+    track_value: 2             # dojazd do punktu az/alt i postój
+    zd_limit: POSITION.INSTRUMENTAL.ZD.REALPOS!MAX   # najmniejsza wysokość celu = 90 - ten limit (zmierzone: 85)
+  slew_equatorial:             # dojazd i tracking; epoka z `epoch` obserwatorium
+    epoch: [OBJECT.EQUATORIAL.EPOCH, OBJECT.EQUATORIAL.EQUINOX]
+    set_before:                # ustawiane przed celem
+      OBJECT.EQUATORIAL.RA_PM: 0
+      OBJECT.EQUATORIAL.DEC_PM: 0
+    ra: OBJECT.EQUATORIAL.RA   # [h]; drzewo zamienia stopnie klienta na godziny
+    dec: OBJECT.EQUATORIAL.DEC # [st]
+    track: POINTING.TRACK
+    track_value: 1
+  tracking:                    # tracking = true / false
+    track: POINTING.TRACK
+    on_value: 1
+    off_value: 0
+    current_ra: POSITION.EQUATORIAL.RA_J2000     # cel dla tracking = true po dojeździe az/alt (bieżąca pozycja)
+    current_dec: POSITION.EQUATORIAL.DEC_J2000
+  abort_slew:                  # TELESCOPE.STOP, ABORT i TRACK=0 nie zatrzymują dojazdu: nowy cel = bieżąca pozycja
+    azimuth: OBJECT.HORIZONTAL.AZ
+    altitude: OBJECT.HORIZONTAL.ALT
+    track: POINTING.TRACK
+    track_value: 2             # zmierzone: przejazd 9-15 st, powrót, bezruch po ok. 10 s
+  cover:
+    target: AUXILIARY.COVER.TARGETPOS
+    position: AUXILIARY.COVER.REALPOS
+    open_value: 1
+    closed_value: 0
+    tolerance: 0.01
+    timeout: 40.0              # [s] SET czeka do końca ruchu (zmierzone: zamknięcie 11 s, otwarcie 14 s)
+    states:                    # coverstate (ASCOM)
+      closed: 1
+      moving: 2
+      open: 3
+      unknown: 4               # pozycja FAILED (np. teleskop wyłączony)
+  focuser:                     # ruch tylko przez pointing: bit SYNCMODE na czas ruchu + POSITION + TRACK=4
+    position: POSITION.INSTRUMENTAL.FOCUS.REALPOS   # [mm]
+    minimum: POSITION.INSTRUMENTAL.FOCUS.REALPOS!MIN
+    maximum: POSITION.INSTRUMENTAL.FOCUS.REALPOS!MAX
+    syncmode: POINTING.SETUP.FOCUS.SYNCMODE         # Pilar ma 16: silnik wyłączany przy ruchu montażu
+    syncmode_bit: 1                                 # ustawiany tylko na czas ruchu, potem stara wartość wraca
+    target: POINTING.SETUP.FOCUS.POSITION           # [mm]
+    track: POINTING.TRACK
+    track_value: 4             # TRACK=4 w trakcie tracking nie przerywa tracking (zmierzone)
+    steps_per_mm: 1000         # pozycja Ocabox w krokach (1 krok = 1 um); focus_offsets filtrów są w krokach
+    tolerance: 0.01            # [mm] (zmierzone: dochodzenie z wahaniem +-0.004 mm)
+    still_time: 1.0            # [s] tyle w tolerancji = koniec ruchu
+    speed: 0.1                 # [mm/s] do limitu czasu ruchu (zmierzone: ok. 0.2 mm/s)
+    timeout_margin: 30.0       # [s] dodawane do limitu czasu ruchu
+    attempts: 3                # tyle razy ruch jest wysyłany, gdy slew montażu go przerywa
+  derotator:
+    position: POSITION.INSTRUMENTAL.DEROTATOR[{device_number}].REALPOS    # [st] kąt mechaniczny
+    target: POSITION.INSTRUMENTAL.DEROTATOR[{device_number}].TARGETPOS    # ruch bez tracking
+    minimum: POSITION.INSTRUMENTAL.DEROTATOR[{device_number}].REALPOS!MIN
+    maximum: POSITION.INSTRUMENTAL.DEROTATOR[{device_number}].REALPOS!MAX
+    syncmode: POINTING.SETUP.DEROTATOR.SYNCMODE     # Pilar ma 2: derotator kompensuje rotację pola
+    offset: POINTING.SETUP.DEROTATOR.OFFSET
+    tracking_syncmode: 3       # ruch w trakcie tracking: SYNCMODE=3 + OFFSET + TRACK=1; po tracking stare
+    track: POINTING.TRACK      #  SYNCMODE i OFFSET wracają
+    track_value: 1
+    tolerance: 0.1             # [st] dojechanie bez tracking
+    tracking_tolerance: 0.5    # [st] dojechanie w trakcie tracking: cel przesuwa się z rotacją pola
+                               #  (zmierzone: 9 st -> 9.06 st)
+    still_speed: 0.2           # [st/s] wolniej (ponad rotację pola) = koniec ruchu
+    still_time: 1.0            # [s]
+    timeout: 60.0              # [s] (zmierzone: 3 st w 1.5 s, do 0.03 st po 6 s, do ok. 10 st/s)
+    attempts: 3                # tyle razy ruch jest wysyłany, gdy slew montażu go przerywa
 
 components:
-  focuser:
-    mappings:
-      connected: "POSITION.INSTRUMENTAL.FOCUS.POWER_STATE"
-      position: "POINTING.SETUP.FOCUS.POSITION"
-      tempcomp: "POINTING.SETUP.FOCUS.TEMPCOMP"
-      ismoving: "POINTING.SETUP.FOCUS.ISMOVING"
-      fansstatus: "AUXILIARY.FANS.STATUS"
-      halt: "POINTING.SETUP.FOCUS.HALT"
-      tracking: "POINITNG.TRACK"
+  telescope:
+    get:
+      connected: {procedure: connected}
+      azimuth: POSITION.HORIZONTAL.AZ
+      altitude: POSITION.HORIZONTAL.ALT
+      rightascension: POSITION.EQUATORIAL.RA_J2000     # [h], drzewo zamienia na stopnie; RA_CURRENT = bieżąca epoka
+      declination: POSITION.EQUATORIAL.DEC_J2000       # DEC_CURRENT = bieżąca epoka
+      siderealtime: POSITION.LOCAL.SIDEREAL_TIME
+      tracking: {procedure: tracking}
+      slewing: {procedure: slewing}
+      atpark: {procedure: at_park}
+    put:
+      connected: {procedure: connect}
+      slewtoaltazasync: {procedure: slew_altaz}
+      slewtoaltaz: {procedure: slew_altaz, wait: true}
+      slewtocoordinatesasync: {procedure: slew_equatorial}
+      slewtocoordinates: {procedure: slew_equatorial, wait: true}
+      abortslew: {procedure: abort_slew}
+      tracking: {procedure: set_tracking}
+      park: {procedure: power, park: true}
+      unpark: {procedure: power, park: false}
     actions:
-      fansturnon:
-        - variable: "fansstatus"
-          value: "ON"
-      fansturnoff:
-        - variable: "fansstatus"
-          value: "OFF"
-      move:
-        - variable: "position"
-          value: "{Position}"
-        - variable: "tracking"
-          value: 4
-
-  telescope: # 'telescope' jest używane jako standardowa nazwa dla komponentu 'mount'
-#    reading:
-    mappings:
-      connected: "POSITION.INSTRUMENTAL.RA.POWER_STATE" #Polecenie dobre, ale wykrzacza się samo "conncted"
-      rightascension: "POSITION.EQUATORIAL.RA_CURRENT"
-      rightascension_move: "OBJECT.EQUATORIAL.RA"
-      declination: "POSITION.EQUATORIAL.DEC_CURRENT"
-      declination_move: "OBJECT.EQUATORIAL.DEC"
-      azimuth: "POSITION.HORIZONTAL.AZ"
-      azimuth_move: "OBJECT.INSTRUMENTAL.AZ"
-      altitude: "POSITION.HORIZONTAL.ALT"
-      altitude_move: "OBJECT.INSTRUMENTAL.ALT"
-      athome: "TELESCOPE.READY_STATE"
-      atpark: "TELESCOPE.READY_STATE"
-      slewing: "TELESCOPE.MOTION_STATE"
-      tracking: "POINTING.TRACK"
-      motorstatus: "TELESCOPE.READY"
-      abortslew: "TELESCOPE.STOP"
-      park: "TELESCOPE.READY" #TO CHANGE
-      motor: "CABINET.POWER" #TO CHANGE
-#      errorstring: "SYSTEM.ERROR.STRING"
-#      sideofpier: "POINTING.STATE.SIDEOFPIER"
-    actions:
-      slewtocoordinates:
-        - variable: "epoch"
-          value: 2000.0
-        - variable: "equinox"
-          value: 2000.0
-        - variable: "rightascension_move"
-          value: "{RightAscension}"
-        - variable: "declination_move"
-          value: "{Declination}"
-        - tracking: "tracking"
-          value: 2
-        - verify:
-            rightascension: "{RightAscension}"
-            declination: "{Declination}"
-            tolerance: 0.05
-            timeout: 120
-      slewtocoordinatesasync:
-        - variable: "epoch"
-          value: 2000.0
-        - variable: "equinox"
-          value: 2000.0
-        - variable: "rightascension_move"
-          value: "{RightAscension}"
-        - variable: "declination_move"
-          value: "{Declination}"
-        - tracking: "tracking"
-          value: 2
-        - verify:
-            rightascension: "{RightAscension}"
-            declination: "{Declination}"
-            tolerance: 0.05
-            timeout: 120
-      slewtoaltaz:
-        - variable: "azimuth_move"
-          value: "{Azimuth}"
-        - variable: "altitude_move"
-          value: "{Altitude}"
-        - variable: "tracking"
-          value: 1
-        - verify:
-            azimuth: "{Azimuth}"
-            altitude: "{Altitude}"
-            tolerance: 0.05
-            timeout: 120
-      slewtoaltazasync:
-        - variable: "azimuth_move"
-          value: "{Azimuth}"
-        - variable: "altitude_move"
-          value: "{Altitude}"
-        - variable: "tracking"
-          value: 2
-        - verify:
-            azimuth: "{Azimuth}"
-            altitude: "{Altitude}"
-            tolerance: 0.05
-            timeout: 120
-      tracking:
-        - variable: "tracking"
-          value: "{Tracking}"
-      abortslew:
-        - variable: "abortslew"
-          value: 0
-      park:
-        - variable: "park"
-          value: 0
-      unpark:
-        - variable: "park"
-          value: 1
-      findhome:
-        - variable: "park"
-          value: 1
-      motoron:
-        - variable: "motor"
-          value: 1
-      motoroff:
-        - variable: "motor"
-          value: 0
-
-  rotator:
-    reading:
-      ismoving: "ROTATOR.STATE.ISMOVING"
-      mechanicalposition: "ROTATOR.POSITION.MECHANICAL"
-      position: "ROTATOR.POSITION.SKY"
-      reverse: "ROTATOR.CONFIG.REVERSE"
-      stepsize: "ROTATOR.CONFIG.STEPSIZE"
-      targetposition: "ROTATOR.POSITION.TARGET"
-      halt: "ROTATOR.COMMAND.HALT"
-    actions:
-      move:
-        - variable: "position" # Ruch względny
-          value: "REL:{Position}"
-      moveabsolute:
-        - variable: "position" # Ruch absolutny
-          value: "{Position}"
-      movemechanical:
-        - variable: "mechanicalposition"
-          value: "{Position}"
-      sync:
-        - variable: "position"
-          value: "SYNC:{Position}"
+      telescope:motoron: {procedure: power, park: false}
+      telescope:errorstring: TELESCOPE.STATUS.ERROR_LIST
+    fixed:
+      athome: false
+      alignmentmode: 0         # algAltAz
+      equatorialsystem: 2      # equJ2000 (przy odczycie RA_CURRENT / DEC_CURRENT: 1, equTopocentric)
+      canpark: true
+      canunpark: true
+      canslew: true
+      canslewasync: true
+      canslewaltaz: true
+      canslewaltazasync: true
+      cansettracking: true
+      canfindhome: false
+      cansetpark: false
+      cansync: false
+      cansyncaltaz: false
+      canpulseguide: false
+      cansetguiderates: false
+      cansetrightascensionrate: false
+      cansetdeclinationrate: false
+      cansetpierside: false
 
   covercalibrator:
-    mappings:
-      coverstate: "AUXILIARY.COVER.REALPOS"
-      covermove: "AUXILIARY.COVER.TARGETPOS"
-#      calibratorstate:
-#      brightness:
-    actions:
-      opencover:
-        - variable: "covermove"
-          value: "1"
-      closecover:
-        - variable: "covermove"
-          value: "0"
-#      calibratoron:
-#        - variable: "brightness"
-#          value: "{Brightness}"
-#        - variable: "calibratorstate"
-#          value: "ON"
-#      calibratoroff:
-#        - variable: "calibratorstate"
-#          value: "OFF"
+    get:
+      connected: {procedure: connected}
+      coverstate: {procedure: cover_state}
+    put:
+      connected: {procedure: connect}
+      opencover: {procedure: cover, open: true}
+      closecover: {procedure: cover, open: false}
+    fixed:
+      calibratorstate: 0       # NotPresent
+      brightness: 0
+      maxbrightness: 0
 
-resource_locks:
-  "POINTING.SETUP.FOCUS.POSITION": "FOCUSER_MOTOR"
-  "POINTING.SETUP.FOCUS.HALT": "FOCUSER_MOTOR"
-  "AUXILIARY.FANS.STATUS": "FANS_CONTROL"
-  "AUXILIARY.COVER.STATE": "COVER_MOTOR"
-  "AUXILIARY.CALIBRATOR.STATE": "CALIBRATOR_LAMP"
-  "AUXILIARY.CALIBRATOR.BRIGHTNESS": "CALIBRATOR_LAMP"
-  "OBJECT.EQUATORIAL.RA": "MOUNT_SLEW"
-  "OBJECT.EQUATORIAL.DEC": "MOUNT_SLEW"
-  "OBJECT.INSTRUMENTAL.AZ": "MOUNT_SLEW"
-  "OBJECT.INSTRUMENTAL.ALT": "MOUNT_SLEW"
-  "POINTING.TRACK": "MOUNT_STATE"
-  "POINTING.STATE.ATPARK": "MOUNT_STATE"
-  "POINTING.STATE.ATHOME": "MOUNT_STATE"
-  "MOTORS.STATUS": "MOUNT_MOTORS"
-  "ROTATOR.POSITION.SKY": "ROTATOR_MOTOR"
-  "ROTATOR.POSITION.MECHANICAL": "ROTATOR_MOTOR"
-  "ROTATOR.COMMAND.HALT": "ROTATOR_MOTOR"
+  focuser:
+    get:
+      connected: {procedure: connected}
+      position: {procedure: focuser_position}
+      ismoving: {procedure: focuser_moving}
+      maxstep: {procedure: focuser_maxstep}
+      maxincrement: {procedure: focuser_maxstep}
+    put:
+      connected: {procedure: connect}
+      move: {procedure: focuser_move}
+    fixed:
+      absolute: true
+      tempcomp: false
+      tempcompavailable: false
+      stepsize: 1.0            # [um] = 1000 / steps_per_mm
+
+  rotator:
+    get:
+      connected: {procedure: connected}
+      position: POSITION.INSTRUMENTAL.DEROTATOR[{device_number}].REALPOS            # kąt mechaniczny
+      mechanicalposition: POSITION.INSTRUMENTAL.DEROTATOR[{device_number}].REALPOS
+      targetposition: {procedure: rotator_target}
+      ismoving: {procedure: rotator_moving}
+    put:
+      connected: {procedure: connect}
+      moveabsolute: {procedure: rotator_move}
+      movemechanical: {procedure: rotator_move}
+      move: {procedure: rotator_move, relative: true}
+    fixed:
+      canreverse: false
+      reverse: false
