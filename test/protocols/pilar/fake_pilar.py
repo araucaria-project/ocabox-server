@@ -122,14 +122,27 @@ class FakePilar:
         return task
 
     async def close(self):
+        """Stop serving and wait until every connection and task of the fake is closed."""
         self.awake.set()
         if self.server is not None:
             self.server.close()
-        for writer in list(self.writers):
+        writers = list(self.writers)
+        for writer in writers:
             writer.close()
-        for task in list(self.tasks):
+        for writer in writers:
+            try:
+                await asyncio.wait_for(writer.wait_closed(), 1.0)
+            except Exception:
+                pass
+        tasks = list(self.tasks)
+        for task in tasks:
             task.cancel()
-        await asyncio.sleep(0)
+        await asyncio.gather(*tasks, return_exceptions=True)
+        if self.server is not None:
+            try:
+                await asyncio.wait_for(self.server.wait_closed(), 1.0)
+            except Exception:
+                pass
 
     def freeze(self, seconds: float, stop_tracking: bool = True):
         """Answer nothing for ``seconds``; then TRACK=0 and for ``reconnect`` s READY_STATE 0 / FAILED."""
@@ -370,6 +383,7 @@ class FakePilar:
             writer.write(b'TOO MANY CLIENTS CONNECTED')
             await writer.drain()
             writer.close()
+            await writer.wait_closed()
             return
         self.clients += 1
         self.writers.add(writer)
@@ -378,7 +392,8 @@ class FakePilar:
                       % self.clients).encode())
 
         def out(text):
-            writer.write((text + '\n').encode('latin-1'))
+            if not writer.is_closing():           # the client may have gone (e.g. a command it gave up on)
+                writer.write((text + '\n').encode('latin-1'))
 
         try:
             while True:
@@ -391,6 +406,7 @@ class FakePilar:
         finally:
             self.clients -= 1
             self.writers.discard(writer)
+            writer.close()
 
     async def _process(self, line, out, writer):
         await self.awake.wait()

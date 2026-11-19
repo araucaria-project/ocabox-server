@@ -10,7 +10,7 @@
 #               * get z napisem: odczyt zmiennej; put z napisem: SET zmiennej na jedyny parametr requestu
 #               * w nazwie zmiennej {device_number} zastępowany jest numerem urządzenia komponentu
 #   actions     metody, które tree wysyła jako put('action', Action=<nazwa>): te same formy co get / put
-#   fixed       stałe wartości odczytów (GET)
+#   fixed       stałe wartości odczytów (GET, także akcji drzewa, np. focuser fansstatus)
 # Metoda, której nie ma w mappingu, dostaje 3002 (nie zaimplementowana). Żeby wyłączyć metodę, usuń jej linię.
 # Procedury (logika: czekanie, zamrożenia, SYNCMODE, zatrzymanie) są w kodzie; zmienne, na których pracują,
 # są w sekcji `procedures`.
@@ -27,8 +27,9 @@ link:
 
 timeouts:                      # [s]
   connect: 5.0
-  greeting: 5.0                # powitanie TPL2 i AUTH OK
-  command: 3.0                 # odpowiedź na GET / SET (zmierzone: 1-2 ms)
+  greeting: 30.0               # powitanie TPL2 i AUTH OK; dłużej niż zamrożenie (zamrożony Pilar nie wita nowych
+                               # połączeń); brak powitania to błąd chwilowy, nie niedostępny Pilar
+  command: 1.0                 # odpowiedź na GET / SET (zmierzone: 1-2 ms); klient ocabox daje requestowi ok. 2 s
   pool_wait: 5.0               # czekanie na wolne połączenie, potem 4008
   stalled_connection: 60.0     # połączenie czekające dłużej na spóźnioną odpowiedź jest zamykane
 
@@ -36,9 +37,13 @@ watcher:                       # watcher: jeden GET stanu co poll_interval, z ni
   poll_interval: 0.5           # [s]
   snapshot_max_age: 1.0        # [s] odczyt klienta z migawki, jeśli nie jest starsza
   freeze_after: 2.0            # [s] brak odpowiedzi tak długo = zamrożenie (zmierzone: 16-18 s co 58-82 s)
+  freeze_suspect_after: 0.5    # [s] brak odpowiedzi tak długo = możliwe zamrożenie: odczyty z ostatnich dobrych
+                               # wartości, komendy przyjmowane i wykonywane po zamrożeniu (zwykle 1-2 ms)
+  freeze_snapshot_max_age: 30.0  # [s] w zamrożeniu i w oknie po nim odczyt daje ostatnią wartość sprzed
+                               # zamrożenia, jeśli nie jest starsza; starsza: 4005 TEMPORARY
   post_freeze_guard: 3.0       # [s] tyle po zamrożeniu FAILED i READY_STATE=0 są chwilowe (zmierzone: 1-2 s)
   outage_after: 180.0          # [s] zamrożenie dłuższe = awaria łącza: 4005 NORMAL, tracking nie jest wznawiany
-  command_freeze_wait: 20.0    # [s] tyle komenda czeka na koniec zamrożenia, potem 4005 TEMPORARY
+  command_freeze_wait: 20.0    # [s] tyle wewnętrzna komenda connectora czeka na koniec zamrożenia
   retrack_attempts: 3          # próby wznowienia tracking po zamrożeniu (na końcu zamrożenia TRACK spada do 0)
   retrack_retry: 2.0           # [s] odstęp między próbami
   retrack_window: 10.0         # [s] TRACK=0 tyle po zamrożeniu = skutek zamrożenia; później = Pilar zatrzymał
@@ -215,6 +220,7 @@ components:
       tempcomp: false
       tempcompavailable: false
       stepsize: 1.0            # [um] = 1000 / steps_per_mm
+      fansstatus: 0            # wentylatory: Pilar ich nie obsługuje (nie testowane); stała, żeby status nie dostał 3002
 
   rotator:
     get:

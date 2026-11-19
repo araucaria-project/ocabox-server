@@ -128,6 +128,7 @@ class MappingTest(PilarTestCase):
                 self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_CRITICAL)
 
     async def test_actions_of_the_device_tree(self):
+        self.assertEqual(await self.put(self.focuser, 'action', Action='fansstatus', Parameters=''), 0)
         text = await self.put(self.mount, 'action', Action='telescope:errorstring', Parameters='')
         self.assertIn('ERR_USV_BatteryAlarm', text)
         for action in ('telescope:motoroff', 'telescope:reportmaxalt'):
@@ -171,7 +172,8 @@ class MappingTest(PilarTestCase):
 
     async def test_special_values(self):
         link = PilarLink.__new__(PilarLink)
-        link._frozen_since, link._guard_until = None, 0.0
+        link.settings = self.connector.settings
+        link._unanswered_since, link._guard_until = None, 0.0
         with self.assertRaises(PilarBusy):
             link.value(Tpl2Item('X', None, Tpl2Special('LOCKEDBY', '31')), 'X')
         with self.assertRaises(PilarUnsupported):
@@ -259,29 +261,76 @@ class MountTest(PilarTestCase):
 
 class FreezeTest(PilarTestCase):
 
-    async def test_read_during_a_freeze_is_temporary(self):
-        await self.get(self.mount, 'azimuth')
+    async def test_read_during_a_freeze_gives_the_last_value(self):
+        self.assertEqual(await self.get(self.mount, 'azimuth'), 180.0)
         self.fake.freeze(0.8)
         await asyncio.sleep(0.5)
-        with self.assertRaises(TreeOtherError) as ctx:
-            await self.get(self.mount, 'azimuth')
-        self.assertEqual(ctx.exception.code, 4005)
-        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_TEMPORARY)
-        await asyncio.sleep(0.5)                                   # end of the freeze + guard
-        with self.assertRaises(TreeOtherError):                    # positions FAILED just after it
-            await self.get(self.mount, 'atpark')
+        self.assertTrue(self.link().frozen())
+        self.assertEqual(await self.get(self.mount, 'azimuth'), 180.0)
+        self.assertFalse(await self.get(self.mount, 'atpark'))
+        await asyncio.sleep(0.45)                                  # end of the freeze: READY_STATE 0, FAILED
+        self.assertTrue(self.link().in_guard())
+        self.assertFalse(await self.get(self.mount, 'atpark'))     # the value from before the freeze
+        self.assertEqual(await self.get(self.mount, 'azimuth'), 180.0)
         await asyncio.sleep(0.5)
+        self.assertTrue(self.link().settled())
         self.assertEqual(await self.get(self.mount, 'azimuth'), 180.0)
 
-    async def test_command_during_a_freeze_waits_for_its_end(self):
+    async def test_command_during_a_freeze_is_done_after_it(self):
         await self.get(self.mount, 'azimuth')
-        self.fake.freeze(0.6)
+        self.fake.freeze(0.8)
         await asyncio.sleep(0.4)
         started = time.monotonic()
         await self.put(self.mount, 'slewtoaltazasync', Azimuth=190.0, Altitude=50.0)
-        self.assertGreater(time.monotonic() - started, 0.15)
+        self.assertLess(time.monotonic() - started, 0.1)           # accepted at once
+        self.assertTrue(await self.get(self.mount, 'slewing'))
+        self.assertNotIn('SET OBJECT.HORIZONTAL.AZ=190', self.fake.received)
         await self.wait_slew_end()
         self.assertAlmostEqual(self.fake.az, 190.0, places=1)
+
+    async def test_abortslew_during_a_freeze_drops_a_waiting_slew(self):
+        await self.get(self.mount, 'azimuth')
+        self.fake.freeze(0.8)
+        await asyncio.sleep(0.4)
+        await self.put(self.mount, 'slewtoaltazasync', Azimuth=250.0, Altitude=50.0)
+        await self.put(self.mount, 'abortslew')
+        await self.wait_slew_end()
+        self.assertNotIn('SET OBJECT.HORIZONTAL.AZ=250', self.fake.received)
+        self.assertEqual(self.fake.count('SET POINTING.TRACK=2'), 1)   # the abortslew only
+        self.assertAlmostEqual(self.fake.az, 180.0, places=1)
+
+    async def test_abortslew_during_a_freeze_keeps_tracking(self):
+        await self.put(self.mount, 'slewtocoordinatesasync', RightAscension=20.5, Declination=-30.0)
+        await self.wait_slew_end()
+        self.fake.freeze(0.6)
+        await asyncio.sleep(0.4)
+        await self.put(self.mount, 'abortslew')                    # not slewing: nothing to stop
+        await asyncio.sleep(1.5)
+        self.assertEqual(self.fake.count('SET POINTING.TRACK=2'), 0)
+        self.assertTrue(await self.get(self.mount, 'tracking'))
+
+    async def test_tracking_off_during_a_freeze(self):
+        await self.put(self.mount, 'slewtocoordinatesasync', RightAscension=20.5, Declination=-30.0)
+        await self.wait_slew_end()
+        self.fake.freeze(0.6)
+        await asyncio.sleep(0.4)
+        await self.put(self.mount, 'tracking', Tracking=False)
+        await asyncio.sleep(1.5)
+        self.assertEqual(self.fake.count('SET POINTING.TRACK=1'), 1)   # not resumed
+        self.assertIn('SET POINTING.TRACK=0', self.fake.received)
+
+    async def test_new_connection_during_a_freeze(self):
+        """A frozen Pilar does not greet new connections: wait for the greeting, no breaker."""
+        await PilarConnector.aclose_all()
+        self.fake.freeze(0.6)
+        await asyncio.sleep(0.05)
+        try:
+            await self.get(self.mount, 'azimuth')                  # answered after the freeze: FAILED at first
+        except TreeOtherError as e:
+            self.assertEqual(e.severity, ResponseError.SEVERITY_TEMPORARY)
+        self.assertFalse(self.link().pool.down)
+        await asyncio.sleep(0.6)
+        self.assertEqual(await self.get(self.mount, 'azimuth'), 180.0)
 
     async def test_tracking_is_resumed_after_a_freeze(self):
         await self.put(self.mount, 'slewtocoordinatesasync', RightAscension=20.5, Declination=-30.0)
@@ -317,6 +366,15 @@ class FreezeTest(PilarTestCase):
         self.assertEqual(self.fake.count('SET POINTING.TRACK=1'), 1)   # not resumed after an outage
         self.assertEqual(await self.get(self.mount, 'altitude'), self.fake.alt)
 
+    async def test_cover_command_during_a_freeze(self):
+        await self.get(self.cover, 'coverstate')
+        self.fake.freeze(0.6)
+        await asyncio.sleep(0.4)
+        await self.put(self.cover, 'closecover')
+        self.assertEqual(await self.get(self.cover, 'coverstate'), 2)
+        await self.until(lambda: self.link().operation_active('cover') is None, what='cover closed')
+        self.assertEqual(await self.get(self.cover, 'coverstate'), 1)
+
     async def test_unreachable_pilar(self):
         await self.fake.close()
         mount = component('telescope', '127.0.0.1:1')
@@ -325,6 +383,30 @@ class FreezeTest(PilarTestCase):
             await self.get(mount, 'azimuth')
         self.assertEqual(ctx.exception.code, 4005)
         self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_NORMAL)
+
+
+class ShortSnapshotTest(PilarTestCase):
+    changes = {'watcher.freeze_snapshot_max_age': 0.4, 'timeouts.greeting': 0.2}
+
+    async def test_read_late_in_a_long_freeze_is_temporary(self):
+        await self.get(self.mount, 'azimuth')
+        self.fake.freeze(1.2)
+        await asyncio.sleep(0.8)
+        with self.assertRaises(TreeOtherError) as ctx:
+            await self.get(self.mount, 'azimuth')
+        self.assertEqual(ctx.exception.code, 4005)
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_TEMPORARY)
+
+    async def test_no_greeting_is_temporary_and_opens_no_breaker(self):
+        await PilarConnector.aclose_all()
+        self.fake.freeze(0.8)
+        await asyncio.sleep(0.05)
+        with self.assertRaises(TreeOtherError) as ctx:
+            await self.get(self.mount, 'azimuth')
+        self.assertEqual(ctx.exception.severity, ResponseError.SEVERITY_TEMPORARY)
+        self.assertFalse(self.link().pool.down)
+        await asyncio.sleep(1.2)
+        self.assertEqual(await self.get(self.mount, 'azimuth'), 180.0)
 
 
 class CoverTest(PilarTestCase):
@@ -368,6 +450,20 @@ class FocuserTest(PilarTestCase):
         self.assertEqual(await self.get(self.focuser, 'position'), 28500)
         self.assertEqual(self.fake.S['POINTING.SETUP.FOCUS.SYNCMODE'], 16)   # the bit only for the move
         self.assertIn('SET POINTING.SETUP.FOCUS.SYNCMODE=17', self.fake.received)
+
+    async def test_position_is_the_target_within_the_tolerance(self):
+        await self.put(self.focuser, 'move', Position=28000)
+        await self.focuser_idle()
+        focus = 'POSITION.INSTRUMENTAL.FOCUS.REALPOS'
+        self.fake.S[focus] = 28.004                                # Pilar keeps it within +-0.004 mm
+        await asyncio.sleep(0.2)
+        self.assertEqual(await self.get(self.focuser, 'position'), 28000)
+        self.fake.S[focus] = 27.996
+        await asyncio.sleep(0.2)
+        self.assertEqual(await self.get(self.focuser, 'position'), 28000)
+        self.fake.S[focus] = 28.05                                 # drift after a mount move: shown as it is
+        await asyncio.sleep(0.2)
+        self.assertEqual(await self.get(self.focuser, 'position'), 28050)
 
     async def test_out_of_range(self):
         with self.assertRaises(AddressError) as ctx:

@@ -82,9 +82,13 @@ class TreePilarTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.error.code, 1003)
         self.fake.freeze(0.8)
         await asyncio.sleep(0.5)
-        response = await self.request('mount.azimuth')
-        self.assertEqual(response.error.code, 4005)
-        self.assertEqual(response.error.severity, 'TEMPORARY')
+        response = await self.request('mount.azimuth', timeout=2.0)     # during a freeze: the last value
+        self.assertTrue(response.status, response.error)
+        self.assertEqual(response.value.v, 180.0)
+        response = await self.request('covercalibrator.closecover', 'PUT', timeout=2.0)   # done after it
+        self.assertTrue(response.status, response.error)
+        response = await self.request('focuser.fansstatus')
+        self.assertEqual(response.value.v, 0)
 
 
 if __name__ == '__main__':

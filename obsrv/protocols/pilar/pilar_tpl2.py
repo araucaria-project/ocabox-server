@@ -42,6 +42,10 @@ class Tpl2Timeout(TimeoutError):
     """No complete reply in time."""
 
 
+class Tpl2NoGreeting(Tpl2Timeout):
+    """Connected, but no greeting in time: the server is there but does not answer (e.g. a Pilar freeze)."""
+
+
 class Tpl2Busy(Tpl2Error):
     """No free connection in the pool in time."""
 
@@ -218,7 +222,8 @@ class Tpl2Connection:
     async def open(cls, host: str, port: int, *, name: str, encoding: str, id_range, connect_timeout: float,
                    greeting_timeout: float, on_event=None, on_settled=None) -> 'Tpl2Connection':
         """Connect and read the greeting. Raises :class:`Tpl2LinkError` when the server cannot be reached or
-        refuses the client, :class:`Tpl2ProtocolError` when the greeting is not TPL2."""
+        refuses the client, :class:`Tpl2NoGreeting` when it is connected but silent, :class:`Tpl2ProtocolError`
+        when the greeting is not TPL2."""
         try:
             reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=connect_timeout)
         except (OSError, asyncio.TimeoutError) as e:
@@ -227,6 +232,10 @@ class Tpl2Connection:
             greeting = await cls._read_greeting(reader, encoding, greeting_timeout)
         except BaseException:
             writer.close()
+            try:
+                await asyncio.wait_for(writer.wait_closed(), 1.0)
+            except BaseException:
+                pass
             raise
         return cls(reader, writer, name=name, encoding=encoding, id_range=id_range, greeting=greeting,
                    on_event=on_event, on_settled=on_settled)
@@ -238,11 +247,11 @@ class Tpl2Connection:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise Tpl2LinkError("no TPL2 greeting in time")
+                raise Tpl2NoGreeting(f"no TPL2 greeting in {timeout:g} s")
             try:
                 raw = await asyncio.wait_for(reader.readline(), timeout=remaining)
             except asyncio.TimeoutError:
-                raise Tpl2LinkError("no TPL2 greeting in time") from None
+                raise Tpl2NoGreeting(f"no TPL2 greeting in {timeout:g} s") from None
             except OSError as e:
                 raise Tpl2LinkError(f"connection lost during the greeting: {e}") from e
             line = raw.decode(encoding, errors='replace').strip()
@@ -307,6 +316,12 @@ class Tpl2Connection:
             pending.abandoned = True
         if not request.future.done():
             request.future.cancel()
+
+    async def wait_closed(self, timeout: float = 1.0) -> None:
+        try:
+            await asyncio.wait_for(self._writer.wait_closed(), timeout)
+        except Exception:
+            pass
 
     def close(self) -> None:
         if not self.closed:
@@ -435,8 +450,10 @@ class Tpl2Pool:
       priority commands (stopping the mount, ``purpose='priority'``), the rest for everything else;
     * ``long_max`` extra connections for commands which hold a connection until a move ends; they are closed
       after use, so they occupy a seat on the server only while needed;
-    * when a connect fails, no connect is tried for ``cooldown`` seconds (breaker) and every lease fails at once
-      with :class:`Tpl2LinkError`; one ERROR log per outage, one WARNING when the server is back;
+    * when a connect fails (refused, unreachable, too many clients), no connect is tried for ``cooldown`` seconds
+      (breaker) and every lease that needs a new connection fails at once with :class:`Tpl2LinkError`; one ERROR
+      log per outage, one WARNING when the server is back. A connection without a greeting in time
+      (:class:`Tpl2NoGreeting`: the server is there but silent) does not open the breaker;
     * a connection whose abandoned command waits for its reply longer than ``stalled_limit`` is closed.
     """
 
@@ -549,8 +566,9 @@ class Tpl2Pool:
     async def _release(self, slot: _Slot) -> None:
         slot.leased = False
         if slot.kind == 'long' and slot.conn is not None and slot.conn.idle:
-            slot.conn.close()
-            slot.conn = None
+            conn, slot.conn = slot.conn, None
+            conn.close()
+            await conn.wait_closed()
         await self._notify()
 
     async def _notify(self) -> None:
@@ -571,6 +589,9 @@ class Tpl2Pool:
                 self.host, self.port, name=f'{self.address}/{name}', encoding=self._encoding,
                 id_range=self._id_range, connect_timeout=self._connect_timeout,
                 greeting_timeout=self._greeting_timeout, on_event=self._on_event, on_settled=self._settled)
+        except Tpl2NoGreeting as e:
+            logger.debug(f"Pilar {self.address}: connection {name}: {e}")
+            raise
         except (Tpl2LinkError, Tpl2ProtocolError) as e:
             self._down_until = time.monotonic() + self._cooldown
             if not self._outage:
@@ -592,3 +613,10 @@ class Tpl2Pool:
             if slot.conn is not None:
                 slot.conn.close()
                 slot.conn = None
+
+    async def aclose(self) -> None:
+        """Close every connection and wait until the sockets are closed."""
+        conns = [slot.conn for slot in self._slots if slot.conn is not None]
+        self.close()
+        for conn in conns:
+            await conn.wait_closed()

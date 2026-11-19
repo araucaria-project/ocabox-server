@@ -12,6 +12,7 @@ def fast_settings(**changes) -> dict:
     cfg['timeouts'].update({'connect': 1.0, 'greeting': 1.0, 'command': 0.5, 'pool_wait': 1.0,
                             'stalled_connection': 5.0})
     cfg['watcher'].update({'poll_interval': 0.05, 'snapshot_max_age': 0.1, 'freeze_after': 0.2,
+                           'freeze_suspect_after': 0.1, 'freeze_snapshot_max_age': 3.0,
                            'post_freeze_guard': 0.4, 'outage_after': 2.0, 'command_freeze_wait': 3.0,
                            'retrack_retry': 0.1, 'retrack_window': 1.0})
     cfg['mount'].update({'speed_window': 0.1, 'settle_time': 0.2, 'start_delay_altaz': 0.15,

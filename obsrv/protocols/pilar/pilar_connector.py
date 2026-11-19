@@ -179,6 +179,8 @@ class PilarSettings:
         self.poll_interval = w.num('poll_interval')
         self.snapshot_max_age = w.num('snapshot_max_age')
         self.freeze_after = w.num('freeze_after')
+        self.freeze_suspect_after = w.num('freeze_suspect_after')
+        self.freeze_snapshot_max_age = w.num('freeze_snapshot_max_age')
         self.post_freeze_guard = w.num('post_freeze_guard')
         self.outage_after = w.num('outage_after')
         self.command_freeze_wait = w.num('command_freeze_wait')
@@ -324,6 +326,7 @@ class _Operation:
     name: str
     task: asyncio.Task
     target: Any = None
+    kind: str = ''                              # mount: 'power', 'abort' or 'queued' (waits for a freeze end)
 
 
 class PilarLink:
@@ -348,9 +351,11 @@ class PilarLink:
         self._forgotten: Dict[str, float] = {}    # variable -> when its snapshot value became out of date
         self._samples: Deque[Tuple[float, float, float]] = deque(maxlen=100)
         self._last_fast = -math.inf
+        self._good: Dict[str, Tuple[float, Tpl2Item]] = {}   # last values read outside freezes and guards
         self.polled_at: Optional[float] = None
         self.first_poll = asyncio.Event()
-        self._frozen_since: Optional[float] = None
+        self._unanswered_since: Optional[float] = None    # the watcher waits for Pilar since then
+        self._freeze_logged = False
         self._guard_until = 0.0
         self.outage = False
         self.last_freeze_end = -math.inf
@@ -364,22 +369,41 @@ class PilarLink:
         self.focus_syncmode_saved: Optional[int] = None
         self.derotator_saved: Optional[Tuple[Any, Any]] = None   # (SYNCMODE, OFFSET) before a move in tracking
         self.rotator_targets: Dict[int, float] = {}
+        self.focus_target: Optional[float] = None   # [mm] where the last focuser move of the connector ended
         self._retrack_task: Optional[asyncio.Task] = None
         self._watch_task = self.loop.create_task(self._watch_loop(), name=f'pilar-watcher-{self.address}')
 
     # ------------------------------------------------------------------ state of the link
 
+    def _unanswered(self) -> float:
+        """How long the watcher has been waiting for Pilar (0 when it is not waiting)."""
+        since = self._unanswered_since
+        return time.monotonic() - since if since is not None else 0.0
+
     def frozen(self) -> bool:
-        return self._frozen_since is not None
+        """Pilar has not answered the watcher for ``freeze_after``."""
+        return self._unanswered() > self.settings.freeze_after
 
     def in_guard(self) -> bool:
         return time.monotonic() < self._guard_until
 
+    def quiet(self) -> bool:
+        """A freeze (also one only suspected: no answer for ``freeze_suspect_after``) or the guard after it: reads
+        are answered with the last good values, commands wait for the end."""
+        return self._unanswered() > self.settings.freeze_suspect_after or self.in_guard()
+
     def unavailable(self) -> bool:
-        return self.outage or self.pool.down
+        """Pilar cannot be reached: an outage, or new connections refused while the watcher gets no answers."""
+        if self.outage:
+            return True
+        if not self.pool.down:
+            return False
+        recent = self.polled_at is not None and \
+            time.monotonic() - self.polled_at <= self.settings.freeze_after + self.settings.poll_interval
+        return not recent
 
     def settled(self) -> bool:
-        return not self.frozen() and not self.in_guard() and not self.unavailable()
+        return not self.quiet() and not self.unavailable()
 
     def _raise_unavailable(self) -> None:
         if self.outage:
@@ -391,8 +415,7 @@ class PilarLink:
         if self.unavailable():
             self._raise_unavailable()
         if self.frozen():
-            raise PilarTransient(f"Pilar at {self.address} frozen for "
-                                 f"{time.monotonic() - self._frozen_since:.0f} s")
+            raise PilarTransient(f"Pilar at {self.address} frozen for {self._unanswered():.0f} s")
 
     async def wait_settled(self, timeout: Optional[float] = None) -> None:
         """Wait for the end of a freeze and of the guard after it; 4005 TEMPORARY after ``timeout``."""
@@ -413,7 +436,7 @@ class PilarLink:
         before it is sent and keeps waiting for its reply while Pilar is frozen; a read fails at once."""
         if self.unavailable():
             self._raise_unavailable()
-        if self.frozen():
+        if self.quiet():
             if not through_freeze:
                 self.check_readable()
             await self.wait_settled()
@@ -452,6 +475,7 @@ class PilarLink:
         now = time.monotonic()
         for var in variables:
             self._snapshot.pop(var.upper(), None)
+            self._good.pop(var.upper(), None)
             self._forgotten[var.upper()] = now
 
     async def set(self, var: str, value: Any, *, purpose: str = 'general', timeout: Optional[float] = None) -> None:
@@ -471,13 +495,22 @@ class PilarLink:
 
     async def read(self, var: str, *, fresh: bool = False, watch: bool = True) -> Tpl2Item:
         """The value of one variable: from the snapshot when fresh enough, otherwise one GET (and from then on
-        the watcher reads it too)."""
+        the watcher reads it too). During a freeze and the guard after it: the last value read before the
+        freeze, if not older than ``freeze_snapshot_max_age``."""
         key = var.upper()
         if watch:
             self._watched.setdefault(key, var)
         if not fresh:
+            now = time.monotonic()
+            if self.quiet():
+                if self.unavailable():
+                    self._raise_unavailable()
+                good = self._good.get(key)
+                if good is not None and now - good[0] <= self.settings.freeze_snapshot_max_age:
+                    return good[1]
+                raise PilarTransient(f"Pilar at {self.address} frozen, no recent value of {var}")
             snap = self._snapshot.get(key)
-            if snap is not None and time.monotonic() - snap[0] <= self.settings.snapshot_max_age:
+            if snap is not None and now - snap[0] <= self.settings.snapshot_max_age:
                 return snap[1]
         items = await self.read_many([var], fresh=True)
         return items[key]
@@ -494,6 +527,8 @@ class PilarLink:
             out[var.upper()] = item
             if var.upper() in self._watched:
                 self._snapshot[var.upper()] = (now, item)
+                if not self.in_guard():
+                    self._good[var.upper()] = (now, item)
         return out
 
     def value(self, item: Tpl2Item, var: str) -> Any:
@@ -506,7 +541,7 @@ class PilarLink:
             raise PilarUnsupported(f"Pilar has no variable {var} ({special.kind})")
         if special.kind == 'LOCKEDBY':
             raise PilarBusy(f"{var} is locked by Pilar command {special.detail}")
-        if special.kind == 'FAILED' and (self.frozen() or self.in_guard()):
+        if special.kind == 'FAILED' and self.quiet():
             raise PilarTransient(f"{var}: FAILED just after a Pilar freeze{detail}")
         raise PilarDeviceError(f"Pilar: {var} {special}{detail}")
 
@@ -518,6 +553,9 @@ class PilarLink:
 
     async def read_number(self, var: str, *, fresh: bool = False, watch: bool = True) -> float:
         return self.number(await self.read(var, fresh=fresh, watch=watch), var)
+
+    def cached_limit(self, var: str) -> Optional[float]:
+        return self._limits.get(var)
 
     async def limit(self, var: str) -> float:
         """A value which does not change (a limit), read once."""
@@ -542,9 +580,10 @@ class PilarLink:
                 await self._poll()
             except asyncio.CancelledError:
                 raise
-            except (Tpl2LinkError, Tpl2Busy, PilarUnavailable) as e:
+            except (Tpl2LinkError, Tpl2Busy, Tpl2Timeout, PilarUnavailable) as e:
                 logger.debug(f"Pilar {self.address}: watcher: {e}")
                 self.first_poll.set()
+                self._check_outage()
                 await asyncio.sleep(s.poll_interval)
                 continue
             except Exception as e:
@@ -553,47 +592,48 @@ class PilarLink:
             await asyncio.sleep(max(0.0, started + s.poll_interval - time.monotonic()))
 
     async def _poll(self) -> None:
+        """One GET of the watched variables. The time without an answer counts from the first unanswered attempt
+        (also a connect waiting for the greeting of a frozen Pilar)."""
         s = self.settings
+        if self._unanswered_since is None:
+            self._unanswered_since = time.monotonic()
         variables = list(self._watched.values())
         async with self.pool.lease('watcher') as conn:
             request = conn.send('GET ' + ';'.join(variables))
             sent = time.monotonic()
             try:
-                done, _ = await asyncio.wait({request.future}, timeout=s.freeze_after)
-                if not done:
-                    self._freeze_begins(sent)
-                    while not request.future.done():
-                        remaining = sent + s.outage_after - time.monotonic()
-                        if remaining <= 0:
-                            self._outage_begins(sent)
-                            conn.close()
-                            raise PilarUnavailable("outage")
-                        await asyncio.wait({request.future}, timeout=min(remaining, 1.0))
+                while not request.future.done():
+                    if self.frozen() and not self._freeze_logged:
+                        self._freeze_logged = True
+                        logger.debug(f"Pilar {self.address}: no answer for {s.freeze_after:g} s, frozen")
+                    if self._check_outage():          # the outage begins now: drop the hanging connection
+                        conn.close()
+                        raise PilarUnavailable("outage")
+                    await asyncio.wait({request.future}, timeout=s.poll_interval / 2)
                 reply = request.future.result()
             except BaseException:
                 conn.abandon(request)
                 raise
         now = time.monotonic()
-        if self._frozen_since is not None or self.outage:
-            self._freeze_ends(now)
+        since = self._unanswered_since
+        self._unanswered_since = None
+        self._freeze_logged = False
+        if since is not None and (now - since > s.freeze_after or self.outage):
+            self._freeze_ends(since, now)
         self.polled_at = now
         self._store(reply, now, sent)
 
-    def _freeze_begins(self, since: float) -> None:
-        if self._frozen_since is None:
-            self._frozen_since = since
-            logger.debug(f"Pilar {self.address}: no answer for {self.settings.freeze_after:g} s, frozen")
-
-    def _outage_begins(self, since: float) -> None:
-        if not self.outage:
+    def _check_outage(self) -> bool:
+        """True when an outage begins now (no answer for ``outage_after``)."""
+        if not self.outage and self._unanswered() > self.settings.outage_after:
             self.outage = True
             logger.error(f"Pilar {self.address}: no answer for {self.settings.outage_after:g} s, outage; "
                          f"tracking will not be resumed")
             self.tracking_wanted = False
+            return True
+        return False
 
-    def _freeze_ends(self, now: float) -> None:
-        since = self._frozen_since if self._frozen_since is not None else now
-        self._frozen_since = None
+    def _freeze_ends(self, since: float, now: float) -> None:
         self._guard_until = now + self.settings.post_freeze_guard
         self.last_freeze_end = now
         self.freezes.append((since, now))
@@ -607,10 +647,13 @@ class PilarLink:
 
     def _store(self, reply: Tpl2Reply, now: float, sent: float) -> None:
         s = self.settings
+        good = not self.in_guard()
         for key in list(self._watched):
             item = reply.items.get(key)
             if item is not None and self._forgotten.get(key, -math.inf) < sent:
                 self._snapshot[key] = (now, item)
+                if good:
+                    self._good[key] = (now, item)
         az = reply.items.get(s.state_azimuth.upper())
         alt = reply.items.get(s.state_altitude.upper())
         if az is not None and alt is not None and az.ok and alt.ok \
@@ -694,7 +737,7 @@ class PilarLink:
             return False
         if now < m.since + m.start_delay:
             return True
-        if self.frozen() or self.in_guard():
+        if self.quiet():
             return True
         if m.target is not None:
             position = self.position()
@@ -734,9 +777,9 @@ class PilarLink:
         op = self.operations.get(key)
         return op if op is not None and not op.task.done() else None
 
-    def start_operation(self, key: str, name: str, coro, target: Any = None) -> _Operation:
+    def start_operation(self, key: str, name: str, coro, target: Any = None, kind: str = '') -> _Operation:
         task = self.loop.create_task(coro, name=f'pilar-{name}')
-        op = _Operation(key, name, task, target)
+        op = _Operation(key, name, task, target, kind)
         self.operations[key] = op
 
         def done(t: asyncio.Task) -> None:
@@ -784,7 +827,13 @@ class PilarLink:
             task.cancel()
         if tasks:
             await asyncio.wait(tasks, timeout=self.settings.command_timeout * 2)
+        watcher = self._watch_task
         self.close()
+        try:
+            await asyncio.wait({watcher}, timeout=self.settings.command_timeout)
+        except Exception:
+            pass
+        await self.pool.aclose()
 
     def close(self) -> None:
         self.closed = True
@@ -822,10 +871,6 @@ _PROCEDURES: Dict[str, Tuple[str, str]] = {
     'focuser_move': ('_put_focuser_move', 'put'),
     'rotator_move': ('_put_rotator_move', 'put'),
 }
-
-
-#: put procedures which do not wait for the end of a freeze before they start
-_NO_FREEZE_WAIT = frozenset({'abort_slew', 'connect'})
 
 
 class PilarConnector(Connector):
@@ -879,6 +924,8 @@ class PilarConnector(Connector):
                 entry = mapping.get.get(name)
             elif name == 'action':
                 action = str(self._param(data, 'Action'))
+                if action.lower() in mapping.fixed:
+                    return mapping.fixed[action.lower()]
                 entry = mapping.actions.get(action.lower())
                 if entry is None:
                     raise self._not_implemented(operation, component, f'action {action}')
@@ -925,11 +972,16 @@ class PilarConnector(Connector):
                 return link.value(await link.read(var), var)
             if len(data) != 1:
                 raise AddressError(code=1003, message=f"SET {var} needs exactly one parameter, got {len(data)}")
-            await link.set(var, next(iter(data.values())))
+            value = next(iter(data.values()))
+            if link.quiet():
+                async def later():
+                    await link.wait_settled(self.settings.outage_after)
+                    await link.set(var, value)
+                link.start_operation(f'set:{var}', f'SET {var} (after a Pilar freeze)', later())
+            else:
+                await link.set(var, value)
             return None
-        method_name, kind = _PROCEDURES[entry.procedure]
-        if kind == 'put' and entry.procedure not in _NO_FREEZE_WAIT:
-            await self._link(component).wait_settled()     # a command asked during a freeze waits for its end
+        method_name, _ = _PROCEDURES[entry.procedure]
         return await getattr(self, method_name)(component, data, **entry.options)
 
     # ------------------------------------------------------------------ links
@@ -1015,7 +1067,7 @@ class PilarConnector(Connector):
         link = self._link(component)
         s = self.settings
         try:
-            await asyncio.wait_for(link.first_poll.wait(), timeout=s.connect_timeout + s.greeting_timeout)
+            await asyncio.wait_for(link.first_poll.wait(), timeout=s.command_timeout)
         except asyncio.TimeoutError:
             pass
         return link.polled_at is not None and not link.unavailable()
@@ -1034,50 +1086,89 @@ class PilarConnector(Connector):
 
     async def _get_slewing(self, component, data) -> bool:
         link = self._link(component)
-        await link.read(self.settings.state_azimuth)     # raises when frozen: the state is not known then
+        await link.read(self.settings.state_azimuth)     # raises when no value is known (e.g. a long freeze)
         return link.slewing()
 
     async def _get_at_park(self, component, data) -> bool:
         link = self._link(component)
         s = self.settings
-        ready = await link.read_number(s.state_ready)
-        if link.in_guard():
-            raise PilarTransient("READY_STATE just after a Pilar freeze")
+        ready = await link.read_number(s.state_ready)        # during a freeze: the value from before it
         op = link.operation_active('mount')
-        if op is not None and op.name.startswith('power'):
+        if op is not None and op.kind == 'power':
             return False
         return ready == s.off_value
 
     def _check_mount_free(self, link: PilarLink) -> None:
         op = link.operation_active('mount')
-        if op is not None and op.name.startswith('power'):
+        if op is not None and op.kind == 'power':
             raise PilarBusy(f"{op.name} in progress")
 
-    async def _before_slew(self, link: PilarLink) -> None:
+    def _queue_mount(self, link: PilarLink, name: str, run) -> None:
+        """A mount command asked during a freeze is done right after it; the request returns at once. A newer
+        mount command replaces one which still waits."""
+        op = link.operation_active('mount')
+        if op is not None:
+            op.task.cancel()
+
+        async def later():
+            await link.wait_settled(self.settings.outage_after)
+            await run(True)
+
+        link.start_operation('mount', f'{name} (after a Pilar freeze)', later(), kind='queued')
+
+    async def _mount_command(self, link: PilarLink, name: str, run) -> None:
+        """``run(queued)`` now, or right after a freeze."""
+        if link.quiet():
+            self._queue_mount(link, name, run)
+        else:
+            await run(False)
+
+    async def _before_slew(self, link: PilarLink, queued: bool) -> None:
         self._check_mount_free(link)
         await link.require_ready()
-        await link.cancel_operation('mount')   # a pending abortslew must not override the new target
+        if not queued:
+            await link.cancel_operation('mount')   # a pending abortslew must not override the new target
         await link.restore_derotator()
+
+    async def _min_altitude(self, link: PilarLink, may_ask: bool) -> Optional[float]:
+        """90 - the zenith distance limit of Pilar; None when it is not known yet and Pilar cannot be asked now."""
+        var = self.settings.slew_altaz.str('zd_limit')
+        cached = link.cached_limit(var)
+        if cached is not None:
+            return 90.0 - cached
+        if not may_ask and link.quiet():
+            return None
+        try:
+            return 90.0 - await link.limit(var)
+        except (PilarUnsupported, PilarDeviceError, PilarReplyError) as e:
+            logger.warning(f"Pilar: no zenith distance limit ({e}); altitude not checked")
+            return -90.0
+
+    def _check_altitude(self, alt: float, min_alt: Optional[float]) -> None:
+        low = min_alt if min_alt is not None else -90.0
+        if not low <= alt <= 90.0:
+            raise self._out_of_range('Altitude', alt, low, 90.0, ' deg')
 
     async def _put_slew_altaz(self, component, data, wait: bool = False) -> None:
         link = self._link(component)
         p = self.settings.slew_altaz
-        az = self._as_float(self._param(data, 'Azimuth'), 'Azimuth')
+        az = self._as_float(self._param(data, 'Azimuth'), 'Azimuth') % 360.0
         alt = self._as_float(self._param(data, 'Altitude'), 'Altitude')
-        try:
-            min_alt = 90.0 - await link.limit(p.str('zd_limit'))
-        except (PilarUnsupported, PilarDeviceError, PilarReplyError) as e:
-            logger.warning(f"Pilar: no zenith distance limit ({e}); altitude not checked")
-            min_alt = -90.0
-        if not min_alt <= alt <= 90.0:
-            raise self._out_of_range('Altitude', alt, min_alt, 90.0, ' deg')
-        az %= 360.0
-        await self._before_slew(link)
-        link.tracking_wanted = False
-        await link.set(p.str('azimuth'), az)
-        await link.set(p.str('altitude'), alt)
-        await link.set(p.str('track'), p.num('track_value'))
-        link.note_motion('altaz', (az, alt))
+        min_alt = await self._min_altitude(link, may_ask=False)
+        self._check_altitude(alt, min_alt)
+        self._check_mount_free(link)
+
+        async def run(queued: bool):
+            if min_alt is None:
+                self._check_altitude(alt, await self._min_altitude(link, may_ask=True))
+            await self._before_slew(link, queued)
+            link.tracking_wanted = False
+            await link.set(p.str('azimuth'), az)
+            await link.set(p.str('altitude'), alt)
+            await link.set(p.str('track'), p.num('track_value'))
+            link.note_motion('altaz', (az, alt))
+
+        await self._mount_command(link, f'slew to az {az:.3f} alt {alt:.3f}', run)
         if wait:
             await self._wait_slew(link)
         return None
@@ -1091,12 +1182,17 @@ class PilarConnector(Connector):
         if not -90.0 <= dec <= 90.0:
             raise self._out_of_range('Declination', dec, -90.0, 90.0, ' deg')
         epoch = self._epoch(component)
-        await self._before_slew(link)
-        await self._set_equatorial_target(link, ra % 24.0, dec, epoch)
+        self._check_mount_free(link)
         p = self.settings.slew_equatorial
-        await link.set(p.str('track'), p.num('track_value'))
-        link.tracking_wanted = True
-        link.note_motion('track')
+
+        async def run(queued: bool):
+            await self._before_slew(link, queued)
+            await self._set_equatorial_target(link, ra % 24.0, dec, epoch)
+            await link.set(p.str('track'), p.num('track_value'))
+            link.tracking_wanted = True
+            link.note_motion('track')
+
+        await self._mount_command(link, f'slew to RA {ra:.5f} h Dec {dec:.4f}', run)
         if wait:
             await self._wait_slew(link)
         return None
@@ -1121,7 +1217,7 @@ class PilarConnector(Connector):
 
     async def _wait_slew(self, link: PilarLink) -> None:
         deadline = time.monotonic() + self.settings.sync_slew_timeout
-        while link.slewing() or link.frozen():
+        while link.slewing() or link.quiet():
             if link.unavailable():
                 link._raise_unavailable()
             if time.monotonic() > deadline:
@@ -1130,11 +1226,15 @@ class PilarConnector(Connector):
 
     async def _put_abort_slew(self, component, data) -> None:
         link = self._link(component)
-        self._check_mount_free(link)
-        if not link.slewing() and not link.frozen():
-            return None                                   # nothing to stop (ALPACA: no-op)
-        if link.operation_active('mount') is not None:
+        op = link.operation_active('mount')
+        if op is not None and op.kind == 'power':
+            raise PilarBusy(f"{op.name} in progress")
+        if op is not None and op.kind == 'abort':
             return None                                   # an abortslew is already on its way
+        if not link.slewing():
+            return None                                   # nothing to stop (ALPACA: no-op; tracking goes on)
+        if op is not None:
+            op.task.cancel()                              # a slew still waiting for the end of a freeze
         s = self.settings
         p = s.abort_slew
 
@@ -1154,7 +1254,7 @@ class PilarConnector(Connector):
                 await asyncio.sleep(s.poll_interval / 2)
 
         link.tracking_wanted = False
-        link.start_operation('mount', 'abortslew', abort())
+        link.start_operation('mount', 'abortslew', abort(), kind='abort')
         return None
 
     async def _put_tracking(self, component, data) -> None:
@@ -1164,41 +1264,53 @@ class PilarConnector(Connector):
         on = self._as_bool(self._param(data, 'Tracking'), 'Tracking')
         self._check_mount_free(link)
         if not on:
-            link.tracking_wanted = False
-            await link.set(p.str('track'), p.num('off_value'))
-            await link.restore_derotator()
-            return None
-        await link.require_ready()
-        track = await link.read(s.state_track, fresh=True)
-        if track.ok and track.value == s.tracking_value:
+            link.tracking_wanted = False                  # also: no resuming after the freeze in progress
+
+        async def run(queued: bool):
+            if not on:
+                await link.set(p.str('track'), p.num('off_value'))
+                await link.restore_derotator()
+                return
+            await link.require_ready()
+            track = await link.read(s.state_track, fresh=True)
+            if track.ok and track.value == s.tracking_value:
+                link.tracking_wanted = True
+                return
+            if not link.equatorial_target:
+                # after an az/alt slew Pilar's target is horizontal: track the current position
+                items = await link.read_many([p.str('current_ra'), p.str('current_dec')])
+                ra = link.number(items[p.str('current_ra').upper()], p.str('current_ra'))
+                dec = link.number(items[p.str('current_dec').upper()], p.str('current_dec'))
+                await self._set_equatorial_target(link, ra, dec, self._epoch(component))
+            await link.set(p.str('track'), p.num('on_value'))
             link.tracking_wanted = True
-            return None
-        if not link.equatorial_target:
-            # after an az/alt slew Pilar's target is horizontal: track the current position
-            items = await link.read_many([p.str('current_ra'), p.str('current_dec')])
-            ra = link.number(items[p.str('current_ra').upper()], p.str('current_ra'))
-            dec = link.number(items[p.str('current_dec').upper()], p.str('current_dec'))
-            await self._set_equatorial_target(link, ra, dec, self._epoch(component))
-        await link.set(p.str('track'), p.num('on_value'))
-        link.tracking_wanted = True
-        link.note_motion('track')
+            link.note_motion('track')
+
+        await self._mount_command(link, 'tracking on' if on else 'tracking off', run)
         return None
 
     async def _put_power(self, component, data, park: bool) -> None:
         link = self._link(component)
         s = self.settings
         on = not park
-        if link.operation_active('mount') is not None or link.operation_active('cover') is not None:
-            busy = link.operation_active('mount') or link.operation_active('cover')
-            raise PilarBusy(f"{busy.name} in progress")
-        await link.wait_settled()
-        ready = await link.read_number(s.state_ready, fresh=True)
-        if ready == (s.ready_value if on else s.off_value):
+        wanted = s.ready_value if on else s.off_value
+        op = link.operation_active('mount')
+        cover = link.operation_active('cover')
+        if op is not None and op.kind == 'power':
+            raise PilarBusy(f"{op.name} in progress")
+        if cover is not None:
+            raise PilarBusy(f"{cover.name} in progress")
+        if link.settled() and await link.read_number(s.state_ready, fresh=True) == wanted:
             return None
+        if op is not None:
+            op.task.cancel()                              # replaces a slew waiting for a freeze end, an abortslew
         name = 'power on (unpark)' if on else 'power off (park)'
         p = s.power
 
         async def power():
+            await link.wait_settled(s.outage_after)
+            if await link.read_number(s.state_ready, fresh=True) == wanted:
+                return
             if not on:
                 link.tracking_wanted = False
                 try:
@@ -1213,7 +1325,7 @@ class PilarConnector(Connector):
                             self.settings.cover.str('position'))
             link.motion = None
 
-        link.start_operation('mount', name, power())
+        link.start_operation('mount', name, power(), kind='power')
         return None
 
     # ------------------------------------------------------------------ procedures: covers
@@ -1226,7 +1338,7 @@ class PilarConnector(Connector):
             return states.int('moving')
         item = await link.read(p.str('position'))
         if not item.ok and item.special.kind == 'FAILED':
-            if link.in_guard() or link.frozen():
+            if link.quiet():
                 raise PilarTransient("cover position FAILED just after a Pilar freeze")
             return states.int('unknown')
         position = link.number(item, p.str('position'))
@@ -1244,13 +1356,18 @@ class PilarConnector(Connector):
         mount = link.operation_active('mount')
         if busy is not None:
             raise PilarBusy(f"{busy.name} in progress")
-        if mount is not None and mount.name.startswith('power'):
+        if mount is not None and mount.kind == 'power':
             raise PilarBusy(f"{mount.name} in progress")
-        await link.require_ready()
+        checked = link.settled()
+        if checked:
+            await link.require_ready()                    # 4009 now; during a freeze: checked after it
         target = p.num('open_value' if open else 'closed_value')
         name = 'open cover' if open else 'close cover'
 
         async def move():
+            if not checked:
+                await link.wait_settled(self.settings.outage_after)
+                await link.require_ready()
             try:
                 await link.set(p.str('target'), target, purpose='long', timeout=p.num('timeout'))
             finally:
@@ -1262,9 +1379,16 @@ class PilarConnector(Connector):
     # ------------------------------------------------------------------ procedures: focuser
 
     async def _get_focuser_position(self, component, data) -> int:
+        """Pilar keeps the focuser within +-0.004 mm of the target, not at it: after a move of the connector the
+        position is the target while the focuser stays within ``tolerance`` of it."""
         link = self._link(component)
         p = self.settings.focuser
-        return int(round(await link.read_number(p.str('position')) * p.num('steps_per_mm')))
+        position = await link.read_number(p.str('position'))
+        target = link.focus_target
+        if target is not None and link.operation_active('focuser') is None \
+                and abs(position - target) <= p.num('tolerance'):
+            position = target
+        return int(round(position * p.num('steps_per_mm')))
 
     async def _get_focuser_moving(self, component, data) -> bool:
         return self._link(component).operation_active('focuser') is not None
@@ -1274,26 +1398,50 @@ class PilarConnector(Connector):
         p = self.settings.focuser
         return int(math.floor(await link.limit(p.str('maximum')) * p.num('steps_per_mm')))
 
+    async def _limits(self, link: PilarLink, low_var: str, high_var: str) -> Optional[Tuple[float, float]]:
+        """Limits of an axis: known, read now, or None when Pilar cannot be asked now (checked later)."""
+        low, high = link.cached_limit(low_var), link.cached_limit(high_var)
+        if low is not None and high is not None:
+            return low, high
+        if link.quiet():
+            return None
+        return await link.limit(low_var), await link.limit(high_var)
+
     async def _put_focuser_move(self, component, data) -> None:
         link = self._link(component)
         p = self.settings.focuser
         steps = self._as_float(self._param(data, 'Position'), 'Position')
         target = round(steps) / p.num('steps_per_mm')
-        low, high = await link.limit(p.str('minimum')), await link.limit(p.str('maximum'))
-        if not low <= target <= high:
-            k = p.num('steps_per_mm')
-            raise self._out_of_range('Position', steps, math.ceil(low * k), math.floor(high * k), ' steps')
-        await link.cancel_operation('focuser')        # a new target replaces the move in progress
-        link.start_operation('focuser', f'focuser move to {target:.4f} mm', self._focuser_move(link, target),
-                             target)
+        limits = await self._limits(link, p.str('minimum'), p.str('maximum'))
+        if limits is not None:
+            self._check_focuser_target(steps, target, limits)
+        previous = link.operation_active('focuser')
+        if previous is not None:
+            previous.task.cancel()                        # a new target replaces the move in progress
+        link.focus_target = None
+        link.start_operation('focuser', f'focuser move to {target:.4f} mm',
+                             self._focuser_move(link, target, previous.task if previous else None,
+                                                check_limits=limits is None, steps=steps), target)
         return None
 
-    async def _focuser_move(self, link: PilarLink, target: float) -> None:
+    def _check_focuser_target(self, steps: float, target: float, limits: Tuple[float, float]) -> None:
+        low, high = limits
+        if not low <= target <= high:
+            k = self.settings.focuser.num('steps_per_mm')
+            raise self._out_of_range('Position', steps, math.ceil(low * k), math.floor(high * k), ' steps')
+
+    async def _focuser_move(self, link: PilarLink, target: float, previous: Optional[asyncio.Task] = None,
+                            check_limits: bool = False, steps: float = 0.0) -> None:
         """Bit of SYNCMODE for the time of the move, POSITION, TRACK=4; the mount has priority: during its slew the
         move waits (Pilar switches the focuser motor off) and is sent again after it."""
         p = self.settings.focuser
         s = self.settings
         bit = p.int('syncmode_bit')
+        if previous is not None:
+            await asyncio.wait({previous})                # the replaced move gives SYNCMODE back first
+        if check_limits:
+            await link.wait_settled(s.outage_after)
+            self._check_focuser_target(steps, target, await self._limits(link, p.str('minimum'), p.str('maximum')))
         try:
             attempts = p.int('attempts')
             for attempt in range(1, attempts + 1):
@@ -1309,6 +1457,7 @@ class PilarConnector(Connector):
                 await link.set(p.str('target'), target)
                 await link.set(p.str('track'), p.num('track_value'))
                 if await self._focuser_wait(link, target):
+                    link.focus_target = target
                     return
                 logger.info(f"Pilar {link.address}: focuser move interrupted by the mount, sent again "
                             f"after the slew (attempt {attempt})")
@@ -1335,7 +1484,7 @@ class PilarConnector(Connector):
             if link.mount_commanded_busy():
                 return False
             try:
-                position = await link.read_number(p.str('position'))
+                position = await link.read_number(p.str('position'), fresh=True)
             except PilarTransient:
                 deadline += s.poll_interval              # a freeze: the move goes on, the time is not counted
                 in_since = None
@@ -1369,24 +1518,35 @@ class PilarConnector(Connector):
         d = self.settings.derotator
         position_var = self._variable(d.str('position'), component)
         value = self._as_float(self._param(data, 'Position'), 'Position')
-        target = value + await link.read_number(position_var, fresh=True) if relative else value
-        low = await link.limit(self._variable(d.str('minimum'), component))
-        high = await link.limit(self._variable(d.str('maximum'), component))
-        if not low <= target <= high:
-            raise self._out_of_range('Position', target, low, high, ' deg')
+        target = value + await link.read_number(position_var) if relative else value
+        limit_vars = (self._variable(d.str('minimum'), component), self._variable(d.str('maximum'), component))
+        limits = await self._limits(link, *limit_vars)
+        if limits is not None and not limits[0] <= target <= limits[1]:
+            raise self._out_of_range('Position', target, limits[0], limits[1], ' deg')
         key = f'rotator{component.device_nr}'
-        await link.cancel_operation(key)
+        previous = link.operation_active(key)
+        if previous is not None:
+            previous.task.cancel()
         link.rotator_targets[component.device_nr] = target
-        link.start_operation(key, f'rotator move to {target:.3f} deg', self._rotator_move(link, component, target),
-                             target)
+        link.start_operation(key, f'rotator move to {target:.3f} deg',
+                             self._rotator_move(link, component, target, previous.task if previous else None,
+                                                limit_vars if limits is None else None), target)
         return None
 
-    async def _rotator_move(self, link: PilarLink, component, target: float) -> None:
+    async def _rotator_move(self, link: PilarLink, component, target: float, previous: Optional[asyncio.Task] = None,
+                            check_limits: Optional[Tuple[str, str]] = None) -> None:
         """Without tracking: TARGETPOS. In tracking (Pilar compensates the field rotation): SYNCMODE=3 + OFFSET +
         TRACK=1; SYNCMODE and OFFSET come back after tracking. The mount has priority, as for the focuser."""
         d = self.settings.derotator
         s = self.settings
         position_var = self._variable(d.str('position'), component)
+        if previous is not None:
+            await asyncio.wait({previous})
+        if check_limits is not None:
+            await link.wait_settled(s.outage_after)
+            low, high = await link.limit(check_limits[0]), await link.limit(check_limits[1])
+            if not low <= target <= high:
+                raise self._out_of_range('Position', target, low, high, ' deg')
         attempts = d.int('attempts')
         for attempt in range(1, attempts + 1):
             await link.wait_mount_idle(s.queue_wait)
