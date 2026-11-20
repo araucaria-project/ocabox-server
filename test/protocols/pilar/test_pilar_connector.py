@@ -114,13 +114,13 @@ class MappingTest(PilarTestCase):
         self.assertTrue(await self.get(self.mount, 'connected'))
 
     async def test_not_mapped_is_3002(self):
-        for comp, op, name, data in ((self.mount, 'get', 'sideofpier', {}),
+        for comp, op, name, data in ((self.mount, 'get', 'guideratedeclination', {}),
                                      (self.mount, 'put', 'findhome', {}),
                                      (self.mount, 'put', 'synctoaltaz', {'Azimuth': 1, 'Altitude': 40}),
                                      (self.cover, 'put', 'haltcover', {}),
                                      (self.focuser, 'put', 'halt', {}),
                                      (self.rotator, 'put', 'halt', {}),
-                                     (self.mount, 'put', 'commandstring', {'Command': 'MotStat', 'Raw': 'True'})):
+                                     (self.mount, 'put', 'commandstring', {'Command': 'Other', 'Raw': 'True'})):
             with self.subTest(name=name):
                 with self.assertRaises(TreeStructureError) as ctx:
                     await getattr(self.connector, op)(comp, name, **data)
@@ -131,7 +131,10 @@ class MappingTest(PilarTestCase):
         self.assertEqual(await self.put(self.focuser, 'action', Action='fansstatus', Parameters=''), 0)
         text = await self.put(self.mount, 'action', Action='telescope:errorstring', Parameters='')
         self.assertIn('ERR_USV_BatteryAlarm', text)
-        for action in ('telescope:motoroff', 'telescope:reportmaxalt'):
+        self.assertEqual(await self.put(self.mount, 'commandstring', Command='MotStat', Raw='True'), 'AZ on, ZD on')
+        self.assertIs(await self.get(self.mount, 'ispulseguiding'), False)
+        self.assertEqual(await self.get(self.mount, 'sideofpier'), -1)
+        for action in ('telescope:reportmaxalt',):
             with self.assertRaises(TreeStructureError) as ctx:
                 await self.put(self.mount, 'action', Action=action, Parameters='')
             self.assertEqual(ctx.exception.code, 3002)
@@ -252,6 +255,14 @@ class MountTest(PilarTestCase):
         await self.wait_slew_end()
         self.assertFalse(await self.get(self.mount, 'atpark'))
         self.assertEqual(await self.get(self.cover, 'coverstate'), 3)
+
+    async def test_motoroff_action_parks(self):
+        await self.put(self.mount, 'action', Action='telescope:motoroff', Parameters='')
+        await self.wait_slew_end(10.0)
+        self.assertTrue(await self.get(self.mount, 'atpark'))
+        self.assertFalse(self.fake.powered)
+        self.assertEqual(await self.put(self.mount, 'commandstring', Command='MotStat', Raw='True'),
+                         'AZ off, ZD off')
 
     async def test_motoron_action_unparks(self):
         self.fake.powered, self.fake.ready_frac = False, 0.0

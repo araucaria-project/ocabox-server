@@ -146,6 +146,16 @@ procedures:
     timeout: 60.0              # [s] (zmierzone: 3 st w 1.5 s, do 0.03 st po 6 s, do ok. 10 st/s)
     attempts: 3                # tyle razy ruch jest wysyłany, gdy slew montażu go przerywa
 
+  motor_status:                # motorstatus: zasilanie osi montażu (OpenTSI POWER_STATE); Pilar nie ma MOTOR.STATUS
+    axes:                      # nazwa w odpowiedzi: zmienna TPL2
+      AZ: POSITION.INSTRUMENTAL.AZ.POWER_STATE
+      ZD: POSITION.INSTRUMENTAL.ZD.POWER_STATE
+    states:                    # wartość POWER_STATE: opis (zmierzone na włączonym teleskopie: 1.0)
+      -1: emergency off
+      0: 'off'
+      0.5: almost on
+      1: 'on'
+
 components:
   telescope:
     get:
@@ -168,11 +178,15 @@ components:
       tracking: {procedure: set_tracking}
       park: {procedure: power, park: true}
       unpark: {procedure: power, park: false}
-    actions:
-      telescope:motoron: {procedure: power, park: false}
+    actions:                   # tree: put('action', Action=...) i put('commandstring', Command=...)
+      telescope:motoron: {procedure: power, park: false}       # READY=1: włącza, otwiera pokrywy
+      telescope:motoroff: {procedure: power, park: true}       # READY=0: Pilar nie wyłącza silników bez parkowania
       telescope:errorstring: TELESCOPE.STATUS.ERROR_LIST
+      motstat: {procedure: motor_status}                       # motorstatus (Command=MotStat)
     fixed:
       athome: false
+      ispulseguiding: false    # Pilar nie ma pulse guiding
+      sideofpier: -1           # pierUnknown: montaż alt-az
       alignmentmode: 0         # algAltAz
       equatorialsystem: 2      # equJ2000 (przy odczycie RA_CURRENT / DEC_CURRENT: 1, equTopocentric)
       canpark: true

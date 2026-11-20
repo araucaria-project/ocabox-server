@@ -217,6 +217,7 @@ class PilarSettings:
         self.cover = p.section('cover')
         self.focuser = p.section('focuser')
         self.derotator = p.section('derotator')
+        self.motor_status = p.section('motor_status')
         self._check_procedures()
 
         self.components: Dict[str, ComponentMapping] = {}
@@ -276,6 +277,12 @@ class PilarSettings:
         for key in ('tracking_syncmode', 'track_value', 'tolerance', 'tracking_tolerance', 'still_speed',
                     'still_time', 'timeout'):
             self.derotator.num(key)
+        axes = self.motor_status.section('axes')
+        if not axes.data:
+            raise PilarConfigError("pilar_config.procedures.motor_status.axes: at least one axis")
+        for key in axes.data:
+            axes.str(key)
+        self.motor_status.section('states')
 
     @staticmethod
     def _entries(section: _Section, procedures: Dict[str, Tuple[str, str]], mode: Optional[str]) \
@@ -861,6 +868,7 @@ _PROCEDURES: Dict[str, Tuple[str, str]] = {
     'focuser_maxstep': ('_get_focuser_maxstep', 'get'),
     'rotator_target': ('_get_rotator_target', 'get'),
     'rotator_moving': ('_get_rotator_moving', 'get'),
+    'motor_status': ('_get_motor_status', 'get'),
     'connect': ('_put_connect', 'put'),
     'power': ('_put_power', 'put'),
     'slew_altaz': ('_put_slew_altaz', 'put'),
@@ -871,6 +879,12 @@ _PROCEDURES: Dict[str, Tuple[str, str]] = {
     'focuser_move': ('_put_focuser_move', 'put'),
     'rotator_move': ('_put_rotator_move', 'put'),
 }
+
+
+#: requests of the device tree which name what to do in a parameter (put('action', Action=...),
+#: put('commandstring', Command=...)): looked up in ``actions`` / ``fixed`` of the mapping by that name
+_ACTION_REQUESTS = {'action': 'Action', 'commandstring': 'Command', 'commandblind': 'Command',
+                    'commandbool': 'Command'}
 
 
 class PilarConnector(Connector):
@@ -922,8 +936,8 @@ class PilarConnector(Connector):
                 if name in mapping.fixed:
                     return mapping.fixed[name]
                 entry = mapping.get.get(name)
-            elif name == 'action':
-                action = str(self._param(data, 'Action'))
+            elif name in _ACTION_REQUESTS:
+                action = str(self._param(data, _ACTION_REQUESTS[name]))
                 if action.lower() in mapping.fixed:
                     return mapping.fixed[action.lower()]
                 entry = mapping.actions.get(action.lower())
@@ -1097,6 +1111,22 @@ class PilarConnector(Connector):
         if op is not None and op.kind == 'power':
             return False
         return ready == s.off_value
+
+    async def _get_motor_status(self, component, data) -> str:
+        """Power of the mount axes (OpenTSI POWER_STATE), e.g. 'AZ on, ZD on'."""
+        link = self._link(component)
+        p = self.settings.motor_status
+        states = p.section('states').data
+        parts = []
+        for axis, var in p.section('axes').data.items():
+            item = await link.read(var)
+            if not item.ok:
+                parts.append(f'{axis} {item.special}')
+                continue
+            value = link.number(item, var)
+            name = next((text for state, text in states.items() if abs(float(state) - value) < 1e-6), None)
+            parts.append(f'{axis} {name if name is not None else f"{value:g}"}')
+        return ', '.join(parts)
 
     def _check_mount_free(self, link: PilarLink) -> None:
         op = link.operation_active('mount')

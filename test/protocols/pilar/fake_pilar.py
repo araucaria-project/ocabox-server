@@ -207,6 +207,8 @@ class FakePilar:
             return 'FAILED'
         if name.startswith('AUXILIARY.COVER') and not self.powered:
             return 'FAILED'
+        if name in ('POSITION.INSTRUMENTAL.AZ.POWER_STATE', 'POSITION.INSTRUMENTAL.ZD.POWER_STATE'):
+            return '1.0' if self.powered else '0.0'
         if name in self.S:
             v = self.S[name]
             return '"%s"' % v if name in self.strings else repr(v)

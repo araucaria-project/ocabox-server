@@ -53,6 +53,10 @@ class TreePilarTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(response.value.v, 24.0)
         response = await self.request('mount.errorstring')           # tree: put('action', telescope:errorstring)
         self.assertIn('ERR_USV_BatteryAlarm', response.value.v)
+        response = await self.request('mount.motorstatus')           # tree: put('commandstring', MotStat)
+        self.assertEqual(response.value.v, 'AZ on, ZD on')
+        response = await self.request('mount.ispulseguiding')
+        self.assertIs(response.value.v, False)
         response = await self.request('covercalibrator.coverstate')
         self.assertEqual(response.value.v, 3)
         response = await self.request('focuser.position')
@@ -74,8 +78,6 @@ class TreePilarTest(unittest.IsolatedAsyncioTestCase):
     async def test_errors_through_the_tree(self):
         response = await self.request('mount.findhome', 'PUT')
         self.assertEqual(response.error.code, 3002)
-        response = await self.request('mount.motorstatus')           # tree: put('commandstring', MotStat)
-        self.assertEqual(response.error.code, 3002)
         response = await self.request('mount.slewtoaltazasync', 'PUT', Azimuth=10.0, Altitude=1.0)
         self.assertEqual(response.error.code, 1003)
         response = await self.request('mount.derotator.moveabsolute', 'PUT', Position=500.0)
@@ -89,6 +91,9 @@ class TreePilarTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(response.status, response.error)
         response = await self.request('focuser.fansstatus')
         self.assertEqual(response.value.v, 0)
+        await asyncio.sleep(1.0)
+        response = await self.request('mount.motoroff', 'PUT')       # tree: put('action', telescope:motoroff)
+        self.assertTrue(response.status, response.error)              # = park (READY=0)
 
 
 if __name__ == '__main__':
